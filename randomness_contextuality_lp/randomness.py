@@ -57,20 +57,21 @@ def _solve_guessing_lp(
         b: int | np.ndarray,
         e: int | np.ndarray,
     ) -> int | np.ndarray:
-        idx = (
-            (((((np.asarray(t) * num_x) + np.asarray(x)) * num_y + np.asarray(y)) * num_a + np.asarray(a))
-             * num_b + np.asarray(b))
-            * num_e
-            + np.asarray(e)
+        """Map multi-indices (with broadcasting) to flat MOSEK variable indices."""
+        t_arr, x_arr, y_arr, a_arr, b_arr, e_arr = np.broadcast_arrays(t, x, y, a, b, e)
+        idx = np.ravel_multi_index(
+            (t_arr, x_arr, y_arr, a_arr, b_arr, e_arr),
+            dims=(num_targets, num_x, num_y, num_a, num_b, num_e),
         )
-        idx = np.asarray(idx, dtype=int)
-        if idx.ndim == 0:
+        if np.ndim(idx) == 0:
             return int(idx)
-        return idx
+        return idx.astype(int, copy=False)
 
     rows_cols: list[list[int]] = []
     rows_vals: list[list[float]] = []
     rhs: list[float] = []
+    row_axis = slice(None), None
+    coeff_axis = None, slice(None)
 
     # Data consistency:
     # sum_e P_t(a,b,e|x,y) = P_data(a,b|x,y)
@@ -84,37 +85,65 @@ def _solve_guessing_lp(
 
     # Preparation operational equivalences:
     # sum_{x,a} c[x,a] P_t(a,b,e|x,y) = 0
-    for t, k, y, b, e in np.ndindex(
-        num_targets,
-        scenario.opeq_preps.shape[0],
-        num_y,
-        num_b,
-        num_e,
-    ):
-        coeffs = scenario.opeq_preps[k]
+    prep_row_shape = (num_targets, num_y, num_b, num_e)
+    prep_rows_per_opeq = int(np.prod(prep_row_shape))
+    prep_t, prep_y, prep_b, prep_e = np.unravel_index(
+        np.arange(prep_rows_per_opeq, dtype=int),
+        prep_row_shape,
+    )
+    for coeffs in scenario.opeq_preps:
         x_nonzero, a_nonzero = np.nonzero(coeffs)
         coeff_nonzero = coeffs[x_nonzero, a_nonzero].astype(float)
-        cols = var_index(t, x_nonzero, y, a_nonzero, b, e)
-        rows_cols.append(cols.tolist())
-        rows_vals.append(coeff_nonzero.tolist())
-        rhs.append(0.0)
+
+        if coeff_nonzero.size == 0:
+            continue
+
+        cols_matrix = var_index(
+            prep_t[row_axis],
+            x_nonzero[coeff_axis],
+            prep_y[row_axis],
+            a_nonzero[coeff_axis],
+            prep_b[row_axis],
+            prep_e[row_axis],
+        )
+        vals_matrix = np.broadcast_to(
+            coeff_nonzero[coeff_axis],
+            cols_matrix.shape,
+        )
+        rows_cols.extend(cols_matrix.tolist())
+        rows_vals.extend(vals_matrix.tolist())
+        rhs.extend([0.0] * prep_rows_per_opeq)
 
     # Measurement operational equivalences:
     # sum_{y,b} d[y,b] P_t(a,b,e|x,y) = 0
-    for t, k, x, a, e in np.ndindex(
-        num_targets,
-        scenario.opeq_meas.shape[0],
-        num_x,
-        num_a,
-        num_e,
-    ):
-        coeffs = scenario.opeq_meas[k]
+    meas_row_shape = (num_targets, num_x, num_a, num_e)
+    meas_rows_per_opeq = int(np.prod(meas_row_shape))
+    meas_t, meas_x, meas_a, meas_e = np.unravel_index(
+        np.arange(meas_rows_per_opeq, dtype=int),
+        meas_row_shape,
+    )
+    for coeffs in scenario.opeq_meas:
         y_nonzero, b_nonzero = np.nonzero(coeffs)
         coeff_nonzero = coeffs[y_nonzero, b_nonzero].astype(float)
-        cols = var_index(t, x, y_nonzero, a, b_nonzero, e)
-        rows_cols.append(cols.tolist())
-        rows_vals.append(coeff_nonzero.tolist())
-        rhs.append(0.0)
+
+        if coeff_nonzero.size == 0:
+            continue
+
+        cols_matrix = var_index(
+            meas_t[row_axis],
+            meas_x[row_axis],
+            y_nonzero[coeff_axis],
+            meas_a[row_axis],
+            b_nonzero[coeff_axis],
+            meas_e[row_axis],
+        )
+        vals_matrix = np.broadcast_to(
+            coeff_nonzero[coeff_axis],
+            cols_matrix.shape,
+        )
+        rows_cols.extend(cols_matrix.tolist())
+        rows_vals.extend(vals_matrix.tolist())
+        rhs.extend([0.0] * meas_rows_per_opeq)
 
     # Objective:
     # average over targets of sum_b sum_a P_t(a,b,e=b|x_t,y_t).
