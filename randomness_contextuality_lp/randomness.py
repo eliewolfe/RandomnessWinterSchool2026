@@ -20,7 +20,33 @@ def eve_optimal_guessing_probability(
     x: int = 0,
     y: int = 0,
 ) -> float:
-    """Compute Eve's optimal guessing probability for one target pair ``(x, y)``."""
+    """Compute Eve's best guessing probability for one chosen target ``(x, y)``.
+
+    Motivation
+    ----------
+    This quantifies certified unpredictability for a specific preparation/measurement
+    choice. It is the targeted randomness metric to use when a protocol fixes one
+    setting pair.
+
+    How to use it with other functions
+    ----------------------------------
+    Build a ``ContextualityScenario`` first (directly, or via
+    ``contextuality_scenario_from_gpt`` / ``contextuality_scenario_from_quantum``),
+    then call this function with the desired ``x`` and ``y``. Convert the result to
+    min-entropy with ``min_entropy_bits`` if needed.
+
+    Input/output structure
+    ----------------------
+    Input is a validated ``ContextualityScenario`` and integer indices ``x`` and
+    ``y`` in range. Output is a single float in ``[0, 1]``: the LP optimum for
+    Eve's guessing probability at that target pair.
+
+    High-level implementation
+    -------------------------
+    Delegates to the shared LP builder/solver with a one-element target list,
+    enforcing data consistency and operational-equivalence constraints from the
+    scenario while maximizing Eve's success objective.
+    """
     if x < 0 or x >= scenario.X_cardinality:
         raise ValueError(f"x must be in 0..{scenario.X_cardinality - 1}.")
     if y < 0 or y >= scenario.Y_cardinality:
@@ -30,9 +56,127 @@ def eve_optimal_guessing_probability(
 
 
 def eve_optimal_average_guessing_probability(scenario: ContextualityScenario) -> float:
-    """Compute average optimal guessing probability over all target pairs ``(x, y)``."""
+    """Compute Eve's optimal guessing probability averaged over all ``(x, y)``.
+
+    Motivation
+    ----------
+    This provides a global, setting-agnostic randomness figure when no single target
+    pair is privileged.
+
+    How to use it with other functions
+    ----------------------------------
+    Use the same scenario objects produced by ``ContextualityScenario`` constructors.
+    Choose this function when you want one aggregate number; choose
+    ``eve_optimal_guessing_probability`` when targeting a specific pair.
+
+    Input/output structure
+    ----------------------
+    Input is one ``ContextualityScenario``. Output is one float in ``[0, 1]``
+    representing the LP optimum of the mean guessing objective over all settings.
+
+    High-level implementation
+    -------------------------
+    Enumerates every ``(x, y)`` pair and solves one LP with an objective that
+    averages per-target success terms, reusing the same feasibility constraints as
+    the single-target optimization.
+    """
     target_pairs = list(np.ndindex(scenario.X_cardinality, scenario.Y_cardinality))
     return _solve_guessing_lp(scenario=scenario, target_pairs=target_pairs)
+
+
+def run_gpt_example(
+    gpt_states: np.ndarray,
+    gpt_effect_set: np.ndarray,
+    title: str | None = None,
+    target_pair: tuple[int, int] | None = None,
+    source_outcome_distribution: np.ndarray | None = None,
+    unit_effect: np.ndarray | None = None,
+    atol: float = 1e-9,
+    outcomes_per_measurement: int = 2,
+    drop_tiny_imag: bool = True,
+    verbose: bool = True,
+) -> tuple[ContextualityScenario, list[tuple[int, ...]], float]:
+    """Convenience pipeline from GPT vectors to scenario and randomness output.
+
+    Motivation
+    ----------
+    This is the GPT-side quick-start helper for exploratory workflows. It builds the
+    contextuality scenario, reports inferred measurement groupings from a flat effect
+    set, and optionally evaluates a targeted Eve-guessing objective.
+
+    How to use it with other functions
+    ----------------------------------
+    Internally this wraps ``contextuality_scenario_from_gpt`` and, when a target
+    measurement is provided, calls ``eve_optimal_guessing_probability``. Use it for
+    single-call experiments; use lower-level constructors/optimizers directly when
+    you want finer control.
+
+    Parameters
+    ----------
+    gpt_states:
+        GPT preparation vectors with shape ``(X,K)`` or ``(X,A,K)``.
+    gpt_effect_set:
+        Flat GPT effect set with shape ``(N_effects,K)``.
+    title:
+        Optional heading printed before the report.
+    target_pair:
+        Optional target setting tuple ``(x,y)``. If provided, the function reports
+        Eve's optimal guessing probability for that ``x`` and ``y``.
+    source_outcome_distribution:
+        Optional ``P(a|x)`` used to form joint ``P(a,b|x,y)`` when states are
+        provided without explicit source outcomes.
+    unit_effect:
+        Optional GPT unit-effect vector; inferred from dimension when omitted.
+    atol:
+        Numerical tolerance used in inference/validation.
+    outcomes_per_measurement:
+        Number of outcomes per inferred measurement subset.
+    drop_tiny_imag:
+        If True, drop tiny imaginary components introduced by numerical noise.
+    verbose:
+        If True, scenario constructor prints probabilities and OPEQs.
+
+    Returns
+    -------
+    tuple
+        ``(scenario, measurement_indices, p_guess)``.
+
+    High-level implementation
+    -------------------------
+    The function first builds a ``ContextualityScenario`` from GPT data, then solves
+    the single-target Eve LP at ``(x,y)`` from ``target_pair`` or defaults to
+    ``(0,0)``.
+    """
+    from .quantum import contextuality_scenario_from_gpt
+
+    if title is not None:
+        print("\n" + "=" * 80)
+        print(title)
+        print("=" * 80)
+
+    scenario, measurement_indices = contextuality_scenario_from_gpt(
+        gpt_states=gpt_states,
+        gpt_effect_set=gpt_effect_set,
+        source_outcome_distribution=source_outcome_distribution,
+        unit_effect=unit_effect,
+        atol=atol,
+        outcomes_per_measurement=outcomes_per_measurement,
+        drop_tiny_imag=drop_tiny_imag,
+        verbose=verbose,
+        return_measurement_indices=True,
+    )
+
+    if target_pair is None:
+        x_target, y_target = 0, 0
+    else:
+        x_target, y_target = target_pair
+
+    p_guess = eve_optimal_guessing_probability(scenario, x=x_target, y=y_target)
+    print("\nEve optimal guessing probability for target setting:")
+    print(f"x_target={x_target}, y_target={y_target}")
+    print(f"measurement indices={measurement_indices[y_target]}")
+    print(f"P_guess = {p_guess:.10f}")
+    return scenario, measurement_indices, p_guess
 
 
 def run_quantum_example(
@@ -42,8 +186,20 @@ def run_quantum_example(
     target_pair: tuple[int, int] | None = None,
     outcomes_per_measurement: int = 2,
     verbose: bool = True,
-) -> tuple[ContextualityScenario, list[tuple[int, ...]], float | None]:
-    """Construct scenario from quantum objects and optionally evaluate Eve guess.
+) -> tuple[ContextualityScenario, list[tuple[int, ...]], float]:
+    """Convenience pipeline from quantum objects to scenario and randomness output.
+
+    Motivation
+    ----------
+    This is a quick-start helper for experiments and demos: one call builds the
+    contextuality scenario, exposes inferred measurement groupings, and optionally
+    computes a targeted guessing probability.
+
+    How to use it with other functions
+    ----------------------------------
+    Internally this converts quantum matrices into GPT vectors and delegates to
+    ``run_gpt_example``. It is best for interactive exploration; for production
+    flows you may call lower-level constructors/optimizers directly.
 
     Parameters
     ----------
@@ -54,47 +210,36 @@ def run_quantum_example(
     title:
         Optional heading printed before the report.
     target_pair:
-        Optional pair of effect indices (e.g. ``(4,5)``). If provided, this
-        function finds the corresponding inferred measurement and reports
-        Eve's optimal guessing probability for ``x=0`` and that measurement.
+        Optional target setting tuple ``(x,y)``. If provided, the function reports
+        Eve's optimal guessing probability for that ``x`` and ``y``.
     outcomes_per_measurement:
         Number of outcomes per inferred measurement subset.
     verbose:
         If True, scenario constructor prints probabilities and OPEQs.
+
+    Returns
+    -------
+    tuple
+        ``(scenario, measurement_indices, p_guess)``.
+
+    High-level implementation
+    -------------------------
+    The function converts matrices to GPT vectors in a Hilbert-Schmidt basis and
+    then executes the same scenario-build and optional target-evaluation pipeline as
+    ``run_gpt_example``. If ``target_pair`` is omitted, it defaults to ``(0,0)``.
     """
-    from .quantum import contextuality_scenario_from_quantum
+    from .quantum import convert_matrix_list_to_vector_list
 
-    if title is not None:
-        print("\n" + "=" * 80)
-        print(title)
-        print("=" * 80)
-
-    scenario, measurement_indices = contextuality_scenario_from_quantum(
-        quantum_states=quantum_states,
-        quantum_effect_set=quantum_effect_set,
+    gpt_states = convert_matrix_list_to_vector_list(quantum_states)
+    gpt_effect_set = convert_matrix_list_to_vector_list(quantum_effect_set)
+    return run_gpt_example(
+        gpt_states=gpt_states,
+        gpt_effect_set=gpt_effect_set,
+        title=title,
+        target_pair=target_pair,
         outcomes_per_measurement=outcomes_per_measurement,
         verbose=verbose,
-        return_measurement_indices=True,
     )
-
-    if target_pair is None:
-        return scenario, measurement_indices, None
-
-    try:
-        y_target = measurement_indices.index(target_pair)
-    except ValueError:
-        try:
-            y_target = measurement_indices.index(tuple(reversed(target_pair)))
-        except ValueError as exc:
-            raise RuntimeError(
-                f"Could not find target measurement with effect indices {target_pair}."
-            ) from exc
-
-    p_guess = eve_optimal_guessing_probability(scenario, x=0, y=y_target)
-    print("\nEve optimal guessing probability for target measurement:")
-    print(f"y_target={y_target}, measurement indices={measurement_indices[y_target]}")
-    print(f"P_guess = {p_guess:.10f}")
-    return scenario, measurement_indices, p_guess
 
 
 def _solve_guessing_lp(

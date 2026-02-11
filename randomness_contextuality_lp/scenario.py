@@ -15,7 +15,42 @@ from scipy.linalg import null_space
 
 
 class ContextualityScenario:
-    """Contextuality scenario with optional/discovered operational equivalences."""
+    """Container for the LP-ready contextuality model used across this package.
+
+    Motivation
+    ----------
+    Most workflows in this package eventually solve an optimization over behaviors
+    ``P(a,b|x,y)`` subject to operational-equivalence constraints. This class is the
+    canonical representation of that optimization input, so construction/validation
+    happen once and downstream routines can assume consistent shapes.
+
+    How to use it with other functions
+    ----------------------------------
+    - Build it directly if you already have a data table and OPEQs.
+    - Prefer ``contextuality_scenario_from_gpt`` or
+      ``contextuality_scenario_from_quantum`` when starting from GPT vectors or
+      density/effect matrices.
+    - Pass the resulting object to
+      ``eve_optimal_guessing_probability`` or
+      ``eve_optimal_average_guessing_probability`` to quantify certifiable
+      randomness.
+
+    Input/output structure
+    ----------------------
+    Input ``data`` is a 4D array with shape ``(X, Y, A, B)`` storing
+    ``P(a,b|x,y)``. Operational equivalences are arrays with shapes
+    ``(N_prep, X, A)`` and ``(N_meas, Y, B)``; if omitted they are discovered from
+    nullspaces of the data table. The constructed object exposes validated arrays and
+    cardinalities ``X_cardinality``, ``Y_cardinality``, ``A_cardinality``,
+    ``B_cardinality``.
+
+    High-level implementation
+    -------------------------
+    The class normalizes input shapes, validates provided OPEQs against linear
+    constraints induced by ``data``, and otherwise discovers OPEQs by nullspace
+    computation on reshaped probability matrices. This yields a compact, consistent
+    linear-algebra view suitable for MOSEK LP construction.
+    """
 
     data: np.ndarray
     opeq_preps: np.ndarray

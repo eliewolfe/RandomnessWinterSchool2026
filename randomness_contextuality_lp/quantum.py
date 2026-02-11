@@ -317,7 +317,37 @@ def contextuality_scenario_from_gpt(
     verbose: bool = False,
     return_measurement_indices: bool = False,
 ) -> ContextualityScenario | tuple[ContextualityScenario, list[tuple[int, ...]]]:
-    """Construct ``ContextualityScenario`` directly from GPT states/effects."""
+    """Build a full ``ContextualityScenario`` from GPT states and a flat effect set.
+
+    Motivation
+    ----------
+    Use this when your model is already in GPT-vector form and you want the package
+    to infer measurement groupings and operational equivalences automatically before
+    running randomness LPs.
+
+    How to use it with other functions
+    ----------------------------------
+    This is the main bridge from GPT object descriptions to optimization. The
+    returned ``ContextualityScenario`` is intended to be passed directly into
+    ``eve_optimal_guessing_probability`` or
+    ``eve_optimal_average_guessing_probability``.
+
+    Input/output structure
+    ----------------------
+    ``gpt_states`` accepts ``(X, K)`` (interpreted as one source outcome per ``x``)
+    or ``(X, A, K)``. ``gpt_effect_set`` is a flat array ``(N_effects, K)`` from
+    which valid measurements are inferred as subsets summing to the unit effect.
+    Output is a validated ``ContextualityScenario``; with
+    ``return_measurement_indices=True`` it also returns the inferred effect-index
+    tuples (one tuple per measurement setting ``y``).
+
+    High-level implementation
+    -------------------------
+    The function: (1) infers measurements from the effect set, (2) computes the
+    joint table ``P(a,b|x,y)``, (3) discovers preparation and measurement OPEQs via
+    nullspace calculations over GPT vectors, and (4) constructs a
+    ``ContextualityScenario`` with those arrays.
+    """
     states = np.asarray(gpt_states, dtype=complex)
     if states.ndim == 2:
         states_for_opeq = states[:, np.newaxis, :]
@@ -373,13 +403,35 @@ def contextuality_scenario_from_quantum(
     verbose: bool = False,
     return_measurement_indices: bool = False,
 ) -> ContextualityScenario | tuple[ContextualityScenario, list[tuple[int, ...]]]:
-    """Construct ``ContextualityScenario`` directly from quantum states/effects.
+    """Build a ``ContextualityScenario`` from density operators and effects.
 
-    State conventions:
-    - ``(X, d, d)`` -> interpreted as X settings with one outcome.
-    - ``(X, A, d, d)`` -> interpreted as X settings and A outcomes.
-    Effect set convention:
-    - ``(N_effects, d, d)``.
+    Motivation
+    ----------
+    Use this when your starting point is quantum objects (matrices), but you want
+    the same scenario representation used by the GPT and LP tooling in this package.
+
+    How to use it with other functions
+    ----------------------------------
+    This is the quantum entry point for downstream randomness analysis. After
+    construction, pass the returned scenario to
+    ``eve_optimal_guessing_probability`` or
+    ``eve_optimal_average_guessing_probability``. It can also be used through
+    ``run_quantum_example`` as a convenience wrapper.
+
+    Input/output structure
+    ----------------------
+    ``quantum_states`` may be ``(X, d, d)`` or ``(X, A, d, d)``. The effect input is
+    a flat set ``quantum_effect_set`` with shape ``(N_effects, d, d)``. Optional
+    arguments control basis conversion, tolerance, inferred measurement cardinality,
+    and verbosity. Returns a ``ContextualityScenario`` and optionally inferred
+    measurement index tuples.
+
+    High-level implementation
+    -------------------------
+    The function converts matrices to GPT vectors in a Hilbert-Schmidt basis, then
+    delegates scenario assembly to ``contextuality_scenario_from_gpt``. This keeps
+    all inference steps (measurement grouping, probability-table construction, and
+    OPEQ discovery) consistent across GPT and quantum workflows.
     """
     q_states = np.asarray(quantum_states, dtype=complex)
     q_effects = np.asarray(quantum_effect_set, dtype=complex)
