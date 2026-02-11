@@ -25,6 +25,7 @@ class ContextualityScenario:
     A_cardinality: int
     B_cardinality: int
     atol: float
+    verbose: bool
 
     def __init__(
         self,
@@ -32,8 +33,10 @@ class ContextualityScenario:
         opeq_preps: np.ndarray | None = None,
         opeq_meas: np.ndarray | None = None,
         atol: float = 1e-9,
+        verbose: bool = False,
     ) -> None:
         self.atol = float(atol)
+        self.verbose = bool(verbose)
         self.data = np.asarray(data, dtype=float)
         if self.data.ndim != 4:
             raise ValueError("data must be a 4-index numpy array with shape (X, Y, A, B).")
@@ -57,6 +60,9 @@ class ContextualityScenario:
                 np.asarray(opeq_meas, dtype=float), self.Y_cardinality, self.B_cardinality
             )
             self.validate_opeqs_multimeter(self.opeq_meas)
+
+        if self.verbose:
+            self._print_verbose_report()
 
     def __repr__(self) -> str:
         return (
@@ -125,6 +131,66 @@ class ContextualityScenario:
             raise ValueError("Each (x, y) slice must satisfy sum_ab P(a,b|x,y) = 1.")
         self.validate_opeqs_multisource(self.opeq_preps)
         self.validate_opeqs_multimeter(self.opeq_meas)
+
+    def format_probabilities(
+        self,
+        as_p_b_given_x_y: bool = False,
+        precision: int = 6,
+    ) -> str:
+        """Return a readable probability-table string.
+
+        If ``as_p_b_given_x_y=True``, expects ``A=1`` and prints one matrix per x
+        with rows indexed by y and columns by b.
+        """
+        if as_p_b_given_x_y:
+            if self.A_cardinality != 1:
+                raise ValueError("Cannot format as p(b|x,y) unless A=1.")
+            lines = []
+            for x in range(self.X_cardinality):
+                matrix = self.data[x, :, 0, :]
+                lines.append(f"x={x}")
+                lines.append(np.array2string(matrix, precision=precision, suppress_small=True))
+            return "\n".join(lines)
+
+        lines = []
+        for x in range(self.X_cardinality):
+            for y in range(self.Y_cardinality):
+                matrix = self.data[x, y]
+                lines.append(f"x={x}, y={y}")
+                lines.append(np.array2string(matrix, precision=precision, suppress_small=True))
+        return "\n".join(lines)
+
+    def format_operational_equivalences(self, precision: int = 6) -> str:
+        """Return a readable operational-equivalence string."""
+        lines = ["Preparation OPEQs:"]
+        for k, eq in enumerate(self.opeq_preps):
+            lines.append(f"k={k}")
+            lines.append(np.array2string(eq, precision=precision, suppress_small=True))
+
+        lines.append("Measurement OPEQs:")
+        for k, eq in enumerate(self.opeq_meas):
+            lines.append(f"k={k}")
+            lines.append(np.array2string(eq, precision=precision, suppress_small=True))
+        return "\n".join(lines)
+
+    def print_probabilities(self, as_p_b_given_x_y: bool = False, precision: int = 6) -> None:
+        """Print formatted probabilities."""
+        print(self.format_probabilities(as_p_b_given_x_y=as_p_b_given_x_y, precision=precision))
+
+    def print_operational_equivalences(self, precision: int = 6) -> None:
+        """Print formatted operational equivalences."""
+        print(self.format_operational_equivalences(precision=precision))
+
+    def _print_verbose_report(self) -> None:
+        print(self.__repr__())
+        if self.A_cardinality == 1:
+            print("\nData table p(b|x,y):")
+            self.print_probabilities(as_p_b_given_x_y=True)
+        else:
+            print("\nData table P(a,b|x,y):")
+            self.print_probabilities(as_p_b_given_x_y=False)
+        print("\nOperational equivalences:")
+        self.print_operational_equivalences()
 
     @staticmethod
     def _normalize_opeq_array(opeqs: np.ndarray, size_1: int, size_2: int) -> np.ndarray:

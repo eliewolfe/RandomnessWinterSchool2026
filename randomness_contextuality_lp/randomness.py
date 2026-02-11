@@ -35,6 +35,68 @@ def eve_optimal_average_guessing_probability(scenario: ContextualityScenario) ->
     return _solve_guessing_lp(scenario=scenario, target_pairs=target_pairs)
 
 
+def run_quantum_example(
+    quantum_states: np.ndarray,
+    quantum_effect_set: np.ndarray,
+    title: str | None = None,
+    target_pair: tuple[int, int] | None = None,
+    outcomes_per_measurement: int = 2,
+    verbose: bool = True,
+) -> tuple[ContextualityScenario, list[tuple[int, ...]], float | None]:
+    """Construct scenario from quantum objects and optionally evaluate Eve guess.
+
+    Parameters
+    ----------
+    quantum_states:
+        Quantum states with shape ``(X,d,d)`` or ``(X,A,d,d)``.
+    quantum_effect_set:
+        Flat set of effects with shape ``(N_effects,d,d)``.
+    title:
+        Optional heading printed before the report.
+    target_pair:
+        Optional pair of effect indices (e.g. ``(4,5)``). If provided, this
+        function finds the corresponding inferred measurement and reports
+        Eve's optimal guessing probability for ``x=0`` and that measurement.
+    outcomes_per_measurement:
+        Number of outcomes per inferred measurement subset.
+    verbose:
+        If True, scenario constructor prints probabilities and OPEQs.
+    """
+    from .quantum import contextuality_scenario_from_quantum
+
+    if title is not None:
+        print("\n" + "=" * 80)
+        print(title)
+        print("=" * 80)
+
+    scenario, measurement_indices = contextuality_scenario_from_quantum(
+        quantum_states=quantum_states,
+        quantum_effect_set=quantum_effect_set,
+        outcomes_per_measurement=outcomes_per_measurement,
+        verbose=verbose,
+        return_measurement_indices=True,
+    )
+
+    if target_pair is None:
+        return scenario, measurement_indices, None
+
+    try:
+        y_target = measurement_indices.index(target_pair)
+    except ValueError:
+        try:
+            y_target = measurement_indices.index(tuple(reversed(target_pair)))
+        except ValueError as exc:
+            raise RuntimeError(
+                f"Could not find target measurement with effect indices {target_pair}."
+            ) from exc
+
+    p_guess = eve_optimal_guessing_probability(scenario, x=0, y=y_target)
+    print("\nEve optimal guessing probability for target measurement:")
+    print(f"y_target={y_target}, measurement indices={measurement_indices[y_target]}")
+    print(f"P_guess = {p_guess:.10f}")
+    return scenario, measurement_indices, p_guess
+
+
 def _solve_guessing_lp(
     scenario: ContextualityScenario,
     target_pairs: list[tuple[int, int]],
@@ -173,12 +235,15 @@ def _solve_guessing_lp(
             task.putobjsense(mosek.objsense.maximize)
             task.optimize()
 
+            acceptable_statuses = {mosek.solsta.optimal}
+            if hasattr(mosek.solsta, "integer_optimal"):
+                acceptable_statuses.add(mosek.solsta.integer_optimal)
             for soltype in (mosek.soltype.itr, mosek.soltype.bas):
                 try:
                     solsta = task.getsolsta(soltype)
                 except mosek.Error:
                     continue
-                if solsta in (mosek.solsta.optimal, mosek.solsta.near_optimal):
+                if solsta in acceptable_statuses:
                     return float(task.getprimalobj(soltype))
 
     raise RuntimeError("LP solve failed: MOSEK did not return an optimal solution.")
