@@ -1,0 +1,22 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "randomness-contextuality-lp"
+version = "0.1.0"
+description = "Tools for exploring randomness quantification in contextuality scenarios via linear programming."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [
+  { name = "Randomness Winter School 2026" }
+]
+dependencies = [
+  "numpy",
+  "mosek",
+]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["randomness_contextuality_lp*"]
