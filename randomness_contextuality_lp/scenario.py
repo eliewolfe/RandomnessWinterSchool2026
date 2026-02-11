@@ -78,7 +78,7 @@ class ContextualityScenario:
             self.X_cardinality * self.A_cardinality,
             self.Y_cardinality * self.B_cardinality,
         )
-        basis = self._nullspace_basis(matrix)
+        basis = null_space(matrix, rcond=self.atol).T
         return basis.reshape(-1, self.Y_cardinality, self.B_cardinality)
 
     def discover_opeqs_multisource(self) -> np.ndarray:
@@ -92,7 +92,7 @@ class ContextualityScenario:
             self.Y_cardinality * self.B_cardinality,
             self.X_cardinality * self.A_cardinality,
         )
-        basis = self._nullspace_basis(matrix)
+        basis = null_space(matrix, rcond=self.atol).T
         return basis.reshape(-1, self.X_cardinality, self.A_cardinality)
 
     def validate_opeqs_multisource(self, opeqs: np.ndarray) -> None:
@@ -125,14 +125,6 @@ class ContextualityScenario:
             raise ValueError("Each (x, y) slice must satisfy sum_ab P(a,b|x,y) = 1.")
         self.validate_opeqs_multisource(self.opeq_preps)
         self.validate_opeqs_multimeter(self.opeq_meas)
-
-    def _nullspace_basis(self, matrix: np.ndarray) -> np.ndarray:
-        """Compute an orthonormal basis for the right nullspace of ``matrix``.
-
-        Returns an array of shape ``(k, n_cols)`` where each row is one nullspace vector.
-        """
-        basis_columns = null_space(matrix, rcond=self.atol)
-        return basis_columns.T
 
     @staticmethod
     def _normalize_opeq_array(opeqs: np.ndarray, size_1: int, size_2: int) -> np.ndarray:
