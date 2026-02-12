@@ -14,6 +14,24 @@ from .scenario import ContextualityScenario
 # Quantum-specific functions
 # ============================================================================
 
+def projector(ket: np.ndarray, drop_tiny_imag: bool = True) -> np.ndarray:
+    """Return the rank-1 projector ``|psi><psi|`` for a state vector ``ket``."""
+    vec = np.asarray(ket, dtype=complex)
+    if vec.ndim != 1:
+        raise ValueError("ket must be a 1D state vector.")
+    proj = np.outer(vec, vec.conj())
+    return np.real_if_close(proj) if drop_tiny_imag else proj
+
+
+def projector_hs_vector(ket: np.ndarray, drop_tiny_imag: bool = True) -> np.ndarray:
+    """Return Hilbert-Schmidt vectorization of ``|psi><psi|``.
+
+    Uses ``vec(P^T)`` so vector inner products match ``Tr(PQ)`` under
+    ``np.einsum(...k,...k)`` conventions used in this module.
+    """
+    return _matrix_to_hs_vector(projector(ket, drop_tiny_imag=False), drop_tiny_imag=drop_tiny_imag)
+
+
 def gell_mann_matrices(d: int) -> np.ndarray:
     """Return normalized Gell-Mann basis with shape ``(d^2, d, d)``."""
     if d <= 0:
@@ -143,9 +161,20 @@ def unit_effect_vector(d: int) -> np.ndarray:
 def probability_table_from_gpt_vectors(
     gpt_states: np.ndarray,
     gpt_effects: np.ndarray,
+    source_outcome_distribution: np.ndarray | None = None,
+    normalize_source_outcomes: bool = True,
+    atol: float = 1e-9,
     drop_tiny_imag: bool = True,
 ) -> np.ndarray:
-    """Compute ``P(a,b|x,y)`` from GPT vectors."""
+    """Compute GPT probability table from grouped state/effect vectors.
+
+    By default this returns a joint table ``P(a,b|x,y)`` by weighting
+    ``p(b|x,y,a)`` with ``P(a|x)``. If ``source_outcome_distribution`` is not
+    provided, a uniform distribution over ``a`` is used for each ``x``.
+
+    Set ``normalize_source_outcomes=False`` to return the conditional table
+    ``p(b|x,y,a)`` directly.
+    """
     states = np.asarray(gpt_states, dtype=complex)
     effects = np.asarray(gpt_effects, dtype=complex)
     if states.ndim != 3:
@@ -156,6 +185,20 @@ def probability_table_from_gpt_vectors(
         raise ValueError("State/effect vector dimensions do not match.")
 
     probs = np.einsum("xak,ybk->xyab", states, effects)
+    if normalize_source_outcomes:
+        num_x, _, num_a, _ = probs.shape
+        if source_outcome_distribution is None:
+            p_a_given_x = np.full((num_x, num_a), 1.0 / float(num_a), dtype=float)
+        else:
+            p_a_given_x = np.asarray(source_outcome_distribution, dtype=float)
+            if p_a_given_x.shape != (num_x, num_a):
+                raise ValueError(f"source_outcome_distribution must have shape ({num_x}, {num_a}).")
+            if np.any(p_a_given_x < -atol):
+                raise ValueError("source_outcome_distribution contains negative entries.")
+            if not np.allclose(p_a_given_x.sum(axis=1), 1.0, atol=atol):
+                raise ValueError("Each source_outcome_distribution[x,:] must sum to 1.")
+            p_a_given_x = np.clip(p_a_given_x, 0.0, None)
+        probs = probs * p_a_given_x[:, np.newaxis, :, np.newaxis]
     return np.real_if_close(probs) if drop_tiny_imag else probs
 
 
@@ -287,22 +330,14 @@ def data_table_from_gpt_states_and_effect_set(
         atol=atol,
         outcomes_per_measurement=outcomes_per_measurement,
     )
-    conditional = probability_table_from_gpt_vectors(states, measurement_effects, drop_tiny_imag=drop_tiny_imag)
-
-    num_x, _, num_a, _ = conditional.shape
-    if source_outcome_distribution is None:
-        p_a_given_x = np.full((num_x, num_a), 1.0 / float(num_a), dtype=float)
-    else:
-        p_a_given_x = np.asarray(source_outcome_distribution, dtype=float)
-        if p_a_given_x.shape != (num_x, num_a):
-            raise ValueError(f"source_outcome_distribution must have shape ({num_x}, {num_a}).")
-        if np.any(p_a_given_x < -atol):
-            raise ValueError("source_outcome_distribution contains negative entries.")
-        if not np.allclose(p_a_given_x.sum(axis=1), 1.0, atol=atol):
-            raise ValueError("Each source_outcome_distribution[x,:] must sum to 1.")
-        p_a_given_x = np.clip(p_a_given_x, 0.0, None)
-
-    joint = conditional * p_a_given_x[:, np.newaxis, :, np.newaxis]
+    joint = probability_table_from_gpt_vectors(
+        states,
+        measurement_effects,
+        source_outcome_distribution=source_outcome_distribution,
+        normalize_source_outcomes=True,
+        atol=atol,
+        drop_tiny_imag=drop_tiny_imag,
+    )
     return joint, measurement_indices
 
 
@@ -428,29 +463,55 @@ def contextuality_scenario_from_quantum(
 
     High-level implementation
     -------------------------
-    The function converts matrices to GPT vectors in a Hilbert-Schmidt basis, then
-    delegates scenario assembly to ``contextuality_scenario_from_gpt``. This keeps
-    all inference steps (measurement grouping, probability-table construction, and
-    OPEQ discovery) consistent across GPT and quantum workflows.
+    The function normally converts matrices to GPT vectors in a Hilbert-Schmidt
+    Gell-Mann basis, then delegates scenario assembly to
+    ``contextuality_scenario_from_gpt``. When states and effects are all projectors
+    and no custom basis/unit-effect is supplied, it uses a faster projector
+    vectorization path instead. This keeps measurement grouping and OPEQ discovery
+    consistent while avoiding unnecessary basis expansion.
     """
     q_states = np.asarray(quantum_states, dtype=complex)
     q_effects = np.asarray(quantum_effect_set, dtype=complex)
     if q_effects.ndim != 3 or q_effects.shape[-2] != q_effects.shape[-1]:
         raise ValueError("quantum_effect_set must have shape (N_effects, d, d).")
+    d = q_effects.shape[-1]
 
     if q_states.ndim == 3:
-        gpt_states = convert_matrix_list_to_vector_list(q_states, basis=basis, drop_tiny_imag=drop_tiny_imag)
+        if q_states.shape[-2] != q_states.shape[-1]:
+            raise ValueError("quantum_states must have square matrices.")
+        if q_states.shape[-1] != d:
+            raise ValueError("quantum_states and quantum_effect_set dimensions must match.")
     elif q_states.ndim == 4:
-        gpt_states = convert_matrix_list_to_vector_list(q_states, basis=basis, drop_tiny_imag=drop_tiny_imag)
+        if q_states.shape[-2] != q_states.shape[-1]:
+            raise ValueError("quantum_states must have square matrices.")
+        if q_states.shape[-1] != d:
+            raise ValueError("quantum_states and quantum_effect_set dimensions must match.")
     else:
         raise ValueError("quantum_states must have shape (X,d,d) or (X,A,d,d).")
 
-    gpt_effect_set = convert_matrix_list_to_vector_list(q_effects, basis=basis, drop_tiny_imag=drop_tiny_imag)
+    use_projector_fast_path = (
+        basis is None
+        and unit_effect is None
+        and _all_projectors(q_states, atol=atol)
+        and _all_projectors(q_effects, atol=atol)
+    )
+
+    if use_projector_fast_path:
+        gpt_states = _matrix_list_to_hs_vectors(q_states, drop_tiny_imag=drop_tiny_imag)
+        gpt_effect_set = _matrix_list_to_hs_vectors(q_effects, drop_tiny_imag=drop_tiny_imag)
+        unit_effect_for_solver = _matrix_to_hs_vector(np.eye(d, dtype=complex), drop_tiny_imag=drop_tiny_imag)
+        if verbose:
+            print("Using projector Hilbert-Schmidt vectorization fast path.")
+    else:
+        gpt_states = convert_matrix_list_to_vector_list(q_states, basis=basis, drop_tiny_imag=drop_tiny_imag)
+        gpt_effect_set = convert_matrix_list_to_vector_list(q_effects, basis=basis, drop_tiny_imag=drop_tiny_imag)
+        unit_effect_for_solver = unit_effect
+
     return contextuality_scenario_from_gpt(
         gpt_states=gpt_states,
         gpt_effect_set=gpt_effect_set,
         source_outcome_distribution=source_outcome_distribution,
-        unit_effect=unit_effect,
+        unit_effect=unit_effect_for_solver,
         atol=atol,
         outcomes_per_measurement=outcomes_per_measurement,
         drop_tiny_imag=drop_tiny_imag,
@@ -477,3 +538,31 @@ def _validate_or_build_basis(basis: np.ndarray | None, d: int) -> np.ndarray:
     if gm.ndim != 3 or gm.shape != (d * d, d, d):
         raise ValueError(f"basis must have shape ({d*d}, {d}, {d}).")
     return gm
+
+
+def _matrix_to_hs_vector(matrix: np.ndarray, drop_tiny_imag: bool = True) -> np.ndarray:
+    """Vectorize one matrix as ``vec(M^T)`` for trace-compatible dot products."""
+    mat = np.asarray(matrix, dtype=complex)
+    if mat.ndim != 2 or mat.shape[0] != mat.shape[1]:
+        raise ValueError("matrix must have shape (d, d).")
+    vec = np.swapaxes(mat, -2, -1).reshape(-1)
+    return np.real_if_close(vec) if drop_tiny_imag else vec
+
+
+def _matrix_list_to_hs_vectors(mats: np.ndarray, drop_tiny_imag: bool = True) -> np.ndarray:
+    """Vectorize matrix arrays ``(..., d, d)`` to ``(..., d*d)`` via ``vec(M^T)``."""
+    arr = np.asarray(mats, dtype=complex)
+    if arr.ndim < 2 or arr.shape[-2] != arr.shape[-1]:
+        raise ValueError("mats must have shape (..., d, d).")
+    vecs = np.swapaxes(arr, -2, -1).reshape(arr.shape[:-2] + (arr.shape[-1] * arr.shape[-1],))
+    return np.real_if_close(vecs) if drop_tiny_imag else vecs
+
+
+def _all_projectors(mats: np.ndarray, atol: float) -> bool:
+    """Check projector conditions ``P^2=P`` and Hermiticity for all matrices."""
+    arr = np.asarray(mats, dtype=complex)
+    if arr.ndim < 2 or arr.shape[-2] != arr.shape[-1]:
+        return False
+    idempotent = np.allclose(arr @ arr, arr, atol=atol, rtol=0.0)
+    hermitian = np.allclose(arr, np.swapaxes(arr.conj(), -2, -1), atol=atol, rtol=0.0)
+    return bool(idempotent and hermitian)

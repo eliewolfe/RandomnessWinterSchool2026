@@ -10,6 +10,8 @@ Data conventions used in this module:
 
 from __future__ import annotations
 
+import warnings
+
 import numpy as np
 
 from .linalg_utils import null_space_basis
@@ -82,6 +84,11 @@ class ContextualityScenario:
         )
 
         if opeq_preps is None:
+            if self.verbose:
+                self._warn_verbose(
+                    "Preparation operational equivalences were not provided; "
+                    "discovering them from the data-table nullspace."
+                )
             self.opeq_preps = self.discover_opeqs_multisource()
         else:
             self.opeq_preps = self._normalize_opeq_array(
@@ -90,6 +97,11 @@ class ContextualityScenario:
             self.validate_opeqs_multisource(self.opeq_preps)
 
         if opeq_meas is None:
+            if self.verbose:
+                self._warn_verbose(
+                    "Measurement operational equivalences were not provided; "
+                    "discovering them from the data-table nullspace."
+                )
             self.opeq_meas = self.discover_opeqs_multimeter()
         else:
             self.opeq_meas = self._normalize_opeq_array(
@@ -248,6 +260,13 @@ class ContextualityScenario:
             self.print_probabilities(as_p_b_given_x_y=False)
         print("\nOperational equivalences:")
         self.print_operational_equivalences()
+
+    @staticmethod
+    def _warn_verbose(message: str) -> None:
+        """Emit a warning and force display (used only in verbose mode)."""
+        with warnings.catch_warnings():
+            warnings.simplefilter("always", UserWarning)
+            warnings.warn(message, UserWarning, stacklevel=3)
 
     @staticmethod
     def _normalize_opeq_array(opeqs: np.ndarray, size_1: int, size_2: int) -> np.ndarray:
