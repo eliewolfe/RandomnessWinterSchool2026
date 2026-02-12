@@ -99,15 +99,31 @@ def _null_space_scipy(mat: np.ndarray, atol: float) -> np.ndarray:
 
 
 def _null_space_sympy(mat: np.ndarray, atol: float) -> np.ndarray:
-    """Compute a null-space row basis using SymPy exact arithmetic."""
+    """Compute a null-space row basis using SymPy with numeric fallback.
+
+    The expected nullity is estimated from a numerical SVD rank test. If SymPy
+    returns a basis with inconsistent dimension (common for floating inputs), the
+    function falls back to the NumPy SVD backend.
+    """
     try:
         import sympy
     except ImportError as exc:  # pragma: no cover
         raise ImportError("sympy is required for method='sympy'.") from exc
 
-    basis_cols = sympy.Matrix(mat).nullspace()
+    mat_clean = np.where(np.abs(mat) <= atol, 0.0, mat)
+    singular_values = np.linalg.svd(mat_clean, compute_uv=False, full_matrices=False)
+    if singular_values.size == 0:
+        expected_rank = 0
+    else:
+        tol = float(atol) * float(singular_values[0])
+        expected_rank = int(np.sum(singular_values > tol))
+    expected_nullity = int(mat_clean.shape[1] - expected_rank)
+
+    basis_cols = sympy.Matrix(mat_clean).nullspace()
+    if len(basis_cols) != expected_nullity:
+        return _null_space_numpy(mat_clean, atol=atol)
     if not basis_cols:
-        return np.empty((0, mat.shape[1]), dtype=float)
+        return np.empty((0, mat_clean.shape[1]), dtype=float)
 
     basis_rows = np.stack(
         [
@@ -116,7 +132,16 @@ def _null_space_sympy(mat: np.ndarray, atol: float) -> np.ndarray:
         ],
         axis=0,
     )
-    return np.where(np.abs(basis_rows) <= atol, 0.0, basis_rows)
+    basis_rows = np.where(np.abs(basis_rows) <= atol, 0.0, basis_rows)
+    if basis_rows.shape[0] != expected_nullity:
+        return _null_space_numpy(mat_clean, atol=atol)
+
+    # Sanity check: basis vectors should satisfy A v = 0 up to tolerance.
+    if basis_rows.size:
+        residual = np.max(np.abs(mat_clean @ basis_rows.T))
+        if residual > 100.0 * float(atol):
+            return _null_space_numpy(mat_clean, atol=atol)
+    return basis_rows
 
 
 def _independent_rows_numpy(mat: np.ndarray, atol: float) -> np.ndarray:

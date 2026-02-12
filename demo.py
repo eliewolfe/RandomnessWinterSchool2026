@@ -219,6 +219,66 @@ def main() -> None:
     _print_manual_target_randomness(scenario_4, context_indices, target_pair=(0, 0))
     _print_manual_target_robustness(scenario_4, "Example 4")
 
+    # Example 5: Peres 24-ray construction restricted to 6 disjoint bases.
+    # Grouping is by contiguous 4-ray blocks from the screenshot:
+    # {1,2,3,4}, {5,6,7,8}, ..., {21,22,23,24}.
+
+    # Peres 24 rays from the screenshot (barred digit -> negative entry).
+    peres_rays_5 = np.array(
+        [
+            [2, 0, 0, 0],   # 1
+            [0, 2, 0, 0],   # 2
+            [0, 0, 2, 0],   # 3
+            [0, 0, 0, 2],   # 4
+            [1, 1, 1, 1],   # 5
+            [1, 1, -1, -1], # 6
+            [1, -1, 1, -1], # 7
+            [1, -1, -1, 1], # 8
+            [1, -1, -1, -1],# 9
+            [1, -1, 1, 1],  # 10
+            [1, 1, -1, 1],  # 11
+            [1, 1, 1, -1],  # 12
+            [1, 1, 0, 0],   # 13
+            [1, -1, 0, 0],  # 14
+            [0, 0, 1, 1],   # 15
+            [0, 0, 1, -1],  # 16
+            [0, 1, 0, 1],   # 17
+            [0, 1, 0, -1],  # 18
+            [1, 0, 1, 0],   # 19
+            [1, 0, -1, 0],  # 20
+            [1, 0, 0, -1],  # 21
+            [1, 0, 0, 1],   # 22
+            [0, 1, -1, 0],  # 23
+            [0, 1, 1, 0],   # 24
+        ],
+        dtype=float,
+    )
+    peres_kets_5 = peres_rays_5 / np.linalg.norm(peres_rays_5, axis=1, keepdims=True)
+
+    context_indices_5 = [tuple(range(4 * y, 4 * (y + 1))) for y in range(6)]
+    gpt_effect_set_example_5 = np.array([projector_hs_vector(ket) for ket in peres_kets_5], dtype=complex)
+    gpt_effects_grouped_example_5 = np.array(
+        [[gpt_effect_set_example_5[idx] for idx in context] for context in context_indices_5],
+        dtype=complex,
+    )  # (6, 4, K)
+    gpt_states_example_5 = np.array(gpt_effects_grouped_example_5, copy=True)
+
+    opeq_preps_5 = discover_operational_equivalences_from_gpt_objects(gpt_states_example_5)
+    opeq_meas_5 = discover_operational_equivalences_from_gpt_objects(gpt_effects_grouped_example_5)
+    data_5 = probability_table_from_gpt_vectors(gpt_states_example_5, gpt_effects_grouped_example_5)
+
+    _print_title("Example 5: Peres 24 rays in 6 disjoint 4-ray bases")
+    scenario_5 = ContextualityScenario(
+        data=np.real_if_close(data_5).astype(float),
+        opeq_preps=np.real_if_close(opeq_preps_5).astype(float),
+        opeq_meas=np.real_if_close(opeq_meas_5).astype(float),
+        verbose=False,
+    )
+    print(scenario_5)
+    _print_measurement_index_sets(context_indices_5)
+    _print_manual_target_randomness(scenario_5, context_indices_5, target_pair=(0, 0))
+    _print_manual_target_robustness(scenario_5, "Example 5")
+
 
 if __name__ == "__main__":
     main()

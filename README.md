@@ -55,7 +55,7 @@ Run the full demonstration script:
 python demo.py
 ```
 
-See `demo.py` for four end-to-end examples, from simple qubit scenarios to a Cabello-style 18-ray construction.
+See `demo.py` for five end-to-end examples, from simple qubit scenarios to Cabello and Peres-style constructions.
 
 ## Conceptual Pipeline
 
@@ -89,7 +89,8 @@ Normalization requirement:
 
 Special case:
 
-- if `A = 1`, this reduces to a single-source behavior and is often read as `p(b|x,y)`.
+- if `A = 1`, this reduces to a single-outcome-per-setting source behavior 
+  a.k.a. controlled preperations, and is often read as `p(b|x,y)`.
 
 ### Operational-equivalence convention
 
@@ -334,6 +335,7 @@ It currently demonstrates:
 2. **Example 2**: qubit (X+Z)/(X-Z), contrasting randomness with Example 1.
 3. **Example 3**: hexagon GPT construction with `|A|=2` (multi-outcome source), manual grouped preparations/effects.
 4. **Example 4**: Cabello-style 18-ray GPT construction, repeated effects across contexts, manual grouping.
+5. **Example 5**: Peres 24-ray construction restricted to the 6 Mermin-square contexts (disjoint 4-outcome bases).
 
 Helper functions used in demo:
 
