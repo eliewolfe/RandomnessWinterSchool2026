@@ -7,6 +7,18 @@ from .randomness import (
     run_gpt_example,
     run_quantum_example,
 )
+from .contextuality import (
+    SimplexEmbeddabilityResult,
+    assess_simplex_embeddability,
+    contextuality_robustness_to_dephasing,
+    effect_assignment_extremals,
+    preparation_assignment_extremals,
+)
+from .linalg_utils import (
+    enumerate_cone_extremal_rays,
+    null_space_basis,
+    select_linearly_independent_rows,
+)
 from .scenario import ContextualityScenario
 from .quantum import (
     convert_matrix_list_to_vector_list,
@@ -30,7 +42,16 @@ __all__ = [
     "ContextualityScenario",
     "contextuality_scenario_from_gpt",
     "contextuality_scenario_from_quantum",
+    "assess_simplex_embeddability",
+    "contextuality_robustness_to_dephasing",
+    "null_space_basis",
+    "select_linearly_independent_rows",
+    "enumerate_cone_extremal_rays",
+    "preparation_assignment_extremals",
+    "effect_assignment_extremals",
+    "SimplexEmbeddabilityResult",
     "eve_optimal_average_guessing_probability",
     "eve_optimal_guessing_probability",
+    "run_gpt_example",
     "run_quantum_example",
 ]

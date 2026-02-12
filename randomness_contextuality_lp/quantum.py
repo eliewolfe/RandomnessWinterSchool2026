@@ -5,8 +5,8 @@ from __future__ import annotations
 from itertools import combinations
 
 import numpy as np
-from scipy.linalg import null_space
 
+from .linalg_utils import null_space_basis
 from .scenario import ContextualityScenario
 
 
@@ -183,7 +183,7 @@ def discover_operational_equivalences_from_gpt_objects(
 
     num_s, num_o, vec_dim = objects.shape
     matrix = objects.reshape(num_s * num_o, vec_dim)
-    basis = null_space(matrix.T, rcond=atol).T
+    basis = null_space_basis(matrix.T, atol=atol)
     return basis.reshape(-1, num_s, num_o)
 
 

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import numpy as np
 
+from randomness_contextuality_lp.contextuality import contextuality_robustness_to_dephasing
 from randomness_contextuality_lp.randomness import run_quantum_example
 
 
@@ -49,12 +50,16 @@ def main() -> None:
         ],
         dtype=complex,
     )
-    run_quantum_example(
+    scenario_1, _, _ = run_quantum_example(
         title="Example 1: Z, X, and (X+Z) measurements",
         quantum_states=quantum_states,
         quantum_effect_set=effects_example_1,
         target_pair=(0, 2),  # target setting (x=0, y=2), i.e. (X+Z)
     )
+    robustness_1 = contextuality_robustness_to_dephasing(scenario_1)
+    print("\nContextuality robustness to dephasing (Example 1):")
+    print(f"r* = {robustness_1:.10f}")
+    print("Interpretation: larger r* means more contextual (more dephasing needed to classicalize).")
 
     # Example 2: effects +/- (X+Z), +/- (X-Z).
     effects_example_2 = np.array(
@@ -66,12 +71,16 @@ def main() -> None:
         ],
         dtype=complex,
     )
-    run_quantum_example(
+    scenario_2, _, _ = run_quantum_example(
         title="Example 2: (X+Z) and (X-Z) measurements",
         quantum_states=quantum_states,
         quantum_effect_set=effects_example_2,
         target_pair=(0, 1),  # target setting (x=0, y=1)
     )
+    robustness_2 = contextuality_robustness_to_dephasing(scenario_2)
+    print("\nContextuality robustness to dephasing (Example 2):")
+    print(f"r* = {robustness_2:.10f}")
+    print("Interpretation: larger r* means more contextual (more dephasing needed to classicalize).")
 
 
 if __name__ == "__main__":

@@ -11,7 +11,8 @@ Data conventions used in this module:
 from __future__ import annotations
 
 import numpy as np
-from scipy.linalg import null_space
+
+from .linalg_utils import null_space_basis
 
 
 class ContextualityScenario:
@@ -119,7 +120,7 @@ class ContextualityScenario:
             self.X_cardinality * self.A_cardinality,
             self.Y_cardinality * self.B_cardinality,
         )
-        basis = null_space(matrix, rcond=self.atol).T
+        basis = null_space_basis(matrix, atol=self.atol)
         return basis.reshape(-1, self.Y_cardinality, self.B_cardinality)
 
     def discover_opeqs_multisource(self) -> np.ndarray:
@@ -133,7 +134,7 @@ class ContextualityScenario:
             self.Y_cardinality * self.B_cardinality,
             self.X_cardinality * self.A_cardinality,
         )
-        basis = null_space(matrix, rcond=self.atol).T
+        basis = null_space_basis(matrix, atol=self.atol)
         return basis.reshape(-1, self.X_cardinality, self.A_cardinality)
 
     def validate_opeqs_multisource(self, opeqs: np.ndarray) -> None:

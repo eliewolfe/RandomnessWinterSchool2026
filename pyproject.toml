@@ -16,6 +16,8 @@ dependencies = [
   "numpy",
   "mosek",
   "scipy",
+  "pycddlib",
+  "sympy",
 ]
 
 [tool.setuptools.packages.find]
