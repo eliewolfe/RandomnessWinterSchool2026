@@ -4,11 +4,6 @@ from __future__ import annotations
 
 import numpy as np
 
-try:
-    import cdd
-except ImportError:  # pragma: no cover - optional dependency at runtime
-    cdd = None  # type: ignore[assignment]
-
 
 def null_space_basis(
     matrix: np.ndarray,
@@ -38,10 +33,7 @@ def select_linearly_independent_rows(
     atol: float = 1e-9,
     method: str = "numpy",
 ) -> np.ndarray:
-    """Return a numerically linearly independent subset of rows.
-
-    Current backend: ``"numpy"``.
-    """
+    """Return a numerically linearly independent subset of rows."""
     mat = np.asarray(matrix, dtype=float)
     if mat.ndim != 2:
         raise ValueError("matrix must be 2D.")
@@ -61,8 +53,8 @@ def enumerate_cone_extremal_rays(
     ``n_vars`` is inferred from ``equalities.shape[1]``.
 
     Supported methods:
-    - ``"cdd"``: pycddlib backend.
-    - ``"mosek"``: placeholder for a future LP-based double-description backend.
+    - ``"cdd"``: pycddlib backend via ``extremal_finders``.
+    - ``"mosek"``: MOSEK-only backend via ``extremal_finders``.
     """
     eq = np.asarray(equalities, dtype=float)
     if eq.ndim != 2:
@@ -71,13 +63,12 @@ def enumerate_cone_extremal_rays(
     if method == "cdd":
         return _enumerate_cone_extremal_rays_cdd(eq, atol=atol)
     if method == "mosek":
-        raise NotImplementedError(
-            "method='mosek' is a placeholder for a future LP-based double-description backend."
-        )
+        return _enumerate_cone_extremal_rays_mosek(eq, atol=atol)
     raise ValueError("method must be one of {'cdd', 'mosek'}.")
 
 
 def _null_space_numpy(mat: np.ndarray, atol: float) -> np.ndarray:
+    """Compute a null-space row basis using NumPy SVD."""
     _, singular_values, vh = np.linalg.svd(mat, full_matrices=True)
     if vh.ndim != 2:
         return np.empty((0, mat.shape[1]), dtype=float)
@@ -94,6 +85,7 @@ def _null_space_numpy(mat: np.ndarray, atol: float) -> np.ndarray:
 
 
 def _null_space_scipy(mat: np.ndarray, atol: float) -> np.ndarray:
+    """Compute a null-space row basis using SciPy."""
     try:
         from scipy.linalg import null_space as scipy_null_space
     except ImportError as exc:  # pragma: no cover
@@ -107,6 +99,7 @@ def _null_space_scipy(mat: np.ndarray, atol: float) -> np.ndarray:
 
 
 def _null_space_sympy(mat: np.ndarray, atol: float) -> np.ndarray:
+    """Compute a null-space row basis using SymPy exact arithmetic."""
     try:
         import sympy
     except ImportError as exc:  # pragma: no cover
@@ -127,6 +120,7 @@ def _null_space_sympy(mat: np.ndarray, atol: float) -> np.ndarray:
 
 
 def _independent_rows_numpy(mat: np.ndarray, atol: float) -> np.ndarray:
+    """Select an independent row subset using modified Gram-Schmidt."""
     if mat.shape[0] == 0:
         return mat.copy()
 
@@ -137,6 +131,9 @@ def _independent_rows_numpy(mat: np.ndarray, atol: float) -> np.ndarray:
     target_rank = int(np.sum(singular_values > tol))
     if target_rank == 0:
         return np.empty((0, mat.shape[1]), dtype=float)
+    # Fast path: all rows are already linearly independent.
+    if target_rank == mat.shape[0]:
+        return mat.copy()
 
     selected_idx: list[int] = []
     q_basis = np.empty((0, mat.shape[1]), dtype=float)
@@ -161,57 +158,25 @@ def _independent_rows_numpy(mat: np.ndarray, atol: float) -> np.ndarray:
 
 
 def _enumerate_cone_extremal_rays_cdd(equalities: np.ndarray, atol: float) -> np.ndarray:
-    _require_cdd()
+    """Enumerate extremal rays with CDD for ``{x >= 0, A x = 0}``."""
+    from .extremal_finders import cone_h_to_v_cdd
 
-    independent_eq = select_linearly_independent_rows(equalities, atol=atol, method="numpy")
-    num_eq, num_vars = independent_eq.shape
-
-    # One H-representation matrix: inequalities and equalities marked by lin_set.
-    ineq_rows = np.zeros((num_vars, num_vars + 1), dtype=float)
-    ineq_rows[:, 1:] = np.eye(num_vars, dtype=float)
-    if num_eq:
-        eq_rows = np.zeros((num_eq, num_vars + 1), dtype=float)
-        eq_rows[:, 1:] = independent_eq
-        rows = np.vstack([ineq_rows, eq_rows])
-        lin_set = set(range(num_vars, num_vars + num_eq))
-    else:
-        rows = ineq_rows
-        lin_set = set()
-
-    mat = cdd.matrix_from_array(rows.tolist(), lin_set=lin_set, rep_type=cdd.RepType.INEQUALITY)
-    poly = cdd.polyhedron_from_matrix(mat)
-    generators = cdd.copy_generators(poly)
-
-    gen_array = np.asarray(generators.array, dtype=float)
-    if gen_array.ndim != 2 or gen_array.shape[1] != num_vars + 1:
-        raise RuntimeError("CDD returned malformed generator matrix.")
-
-    is_ray = gen_array[:, 0] <= 0.5
-    rays = gen_array[is_ray, 1:]
-    rays = np.where(np.abs(rays) <= atol, 0.0, rays)
-    rays = rays[np.linalg.norm(rays, axis=1) > atol]
+    eq = select_linearly_independent_rows(equalities, atol=atol, method="numpy")
+    num_vars = eq.shape[1]
+    A_ineq = np.eye(num_vars, dtype=float)
+    rays, _ = cone_h_to_v_cdd(A_ineq=A_ineq, A_eq=eq, atol=atol)
+    rays = np.asarray(rays, dtype=float)
     if rays.size == 0:
         raise RuntimeError("No extremal rays found for assignment cone.")
-
-    # Deduplicate by direction only (positive scaling is irrelevant).
-    unique_rays: list[np.ndarray] = []
-    unique_dirs: list[np.ndarray] = []
-    for ray in rays:
-        scale = float(np.max(np.abs(ray)))
-        if scale <= atol:
-            continue
-        direction = ray / scale
-        if not any(np.allclose(direction, existing, atol=atol, rtol=0.0) for existing in unique_dirs):
-            unique_rays.append(ray)
-            unique_dirs.append(direction)
-    if not unique_rays:
-        raise RuntimeError("No unique extremal rays found for assignment cone.")
-
-    return np.asarray(unique_rays, dtype=float)
+    return rays
 
 
-def _require_cdd() -> None:
-    if cdd is None:
-        raise ImportError(
-            "pycddlib is required for method='cdd'. Install it with `pip install pycddlib`."
-        )
+def _enumerate_cone_extremal_rays_mosek(equalities: np.ndarray, atol: float) -> np.ndarray:
+    """Enumerate extremal rays with MOSEK for ``{x >= 0, A x = 0}``."""
+    from .extremal_finders import cone_h_to_v_mosek
+
+    eq = select_linearly_independent_rows(equalities, atol=atol, method="numpy")
+    num_vars = eq.shape[1]
+    A_ineq = np.eye(num_vars, dtype=float)
+    rays, _ = cone_h_to_v_mosek(A_ineq=A_ineq, A_eq=eq, atol=atol, certify_with_mosek=True)
+    return np.asarray(rays, dtype=float)

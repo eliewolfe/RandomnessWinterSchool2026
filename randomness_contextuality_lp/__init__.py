@@ -19,6 +19,12 @@ from .linalg_utils import (
     null_space_basis,
     select_linearly_independent_rows,
 )
+from .extremal_finders import (
+    cone_h_to_v_cdd,
+    cone_v_to_h_cdd,
+    cone_h_to_v_mosek,
+    cone_v_to_h_mosek,
+)
 from .scenario import ContextualityScenario
 from .quantum import (
     convert_matrix_list_to_vector_list,
@@ -47,6 +53,10 @@ __all__ = [
     "null_space_basis",
     "select_linearly_independent_rows",
     "enumerate_cone_extremal_rays",
+    "cone_h_to_v_cdd",
+    "cone_v_to_h_cdd",
+    "cone_h_to_v_mosek",
+    "cone_v_to_h_mosek",
     "preparation_assignment_extremals",
     "effect_assignment_extremals",
     "SimplexEmbeddabilityResult",
