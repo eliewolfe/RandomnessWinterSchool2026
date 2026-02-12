@@ -49,16 +49,31 @@ def _print_manual_target_randomness(
     scenario: ContextualityScenario,
     measurement_indices: list[tuple[int, ...]],
     target_pair: tuple[int, int],
+    bin_outcomes: list[list[int]] | tuple[tuple[int, ...], ...] | None = None,
 ) -> None:
     x_target, y_target = target_pair
-    p_guess_eve = eve_optimal_guessing_probability(scenario, x=x_target, y=y_target)
-    p_guess_alice = scenario.alice_optimal_guessing_probability(x=x_target, y=y_target)
-    print("\nEve optimal guessing probability for target setting:")
+    p_guess_eve = eve_optimal_guessing_probability(
+        scenario,
+        x=x_target,
+        y=y_target,
+        bin_outcomes=bin_outcomes,
+    )
+    p_guess_alice = scenario.alice_optimal_guessing_probability(
+        x=x_target,
+        y=y_target,
+        bin_outcomes=bin_outcomes,
+    )
+    target_label = "Bob's outcome bins" if bin_outcomes is not None else "Bob's outcome"
+    print(f"\nEve optimal guessing probability for {target_label} at target setting:")
     print(f"x_target={x_target}, y_target={y_target}")
     print(f"measurement indices={measurement_indices[y_target]}")
+    if bin_outcomes is not None:
+        print(f"bins={bin_outcomes}")
     print(f"P_guess = {p_guess_eve:.10f}")
-    print("\nAlice optimal guessing probability for target setting:")
+    print(f"\nAlice optimal guessing probability for {target_label} at target setting:")
     print(f"x_target={x_target}, y_target={y_target}")
+    if bin_outcomes is not None:
+        print(f"bins={bin_outcomes}")
     print(f"P_guess = {p_guess_alice:.10f}")
 
 
@@ -298,7 +313,11 @@ def main() -> None:
     )
     print(scenario_5)
     _print_measurement_index_sets(context_indices_5)
-    _print_manual_target_randomness(scenario_5, context_indices_5, target_pair=(0, 0))
+    _print_manual_target_randomness(
+        scenario_5,
+        context_indices_5,
+        target_pair=(0, 0),
+    )
     _print_manual_target_robustness(scenario_5, "Example 5")
 
 

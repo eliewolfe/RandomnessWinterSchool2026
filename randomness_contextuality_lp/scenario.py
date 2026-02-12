@@ -180,25 +180,58 @@ class ContextualityScenario:
         self.validate_opeqs_multisource(self.opeq_preps)
         self.validate_opeqs_multimeter(self.opeq_meas)
 
-    def alice_optimal_guessing_probability(self, x: int = 0, y: int = 0) -> float:
+    def alice_optimal_guessing_probability(
+        self,
+        x: int = 0,
+        y: int = 0,
+        bin_outcomes: list[list[int]] | tuple[tuple[int, ...], ...] | None = None,
+    ) -> float:
         """Return Alice's optimal guess probability for Bob's outcome at fixed ``(x,y)``.
 
         Alice is assumed to know ``a`` and, after settings are announced, can choose
         the best ``b`` for each ``a``. This computes:
         ``sum_a p(a|x,y) max_b p(b|x,y,a)``.
+
+        If ``bin_outcomes`` is provided, Alice guesses which bin Bob's outcome falls
+        into, where bins are provided as e.g. ``[[0, 1], [2, 3]]``.
         """
         if x < 0 or x >= self.X_cardinality:
             raise ValueError(f"x must be in 0..{self.X_cardinality - 1}.")
         if y < 0 or y >= self.Y_cardinality:
             raise ValueError(f"y must be in 0..{self.Y_cardinality - 1}.")
 
-        # Equivalent to sum_a max_b P(a,b|x,y), avoiding division by tiny p(a|x,y).
-        return float(np.max(self.data[x, y, :, :], axis=1).sum())
+        slice_xy = self.data[x, y, :, :]
+        if bin_outcomes is None:
+            # Equivalent to sum_a max_b P(a,b|x,y), avoiding division by tiny p(a|x,y).
+            return float(np.max(slice_xy, axis=1).sum())
 
-    def alice_optimal_average_guessing_probability(self) -> float:
-        """Return Alice's optimal guess probability averaged uniformly over all ``(x,y)``."""
-        max_over_b = np.max(self.data, axis=3)  # shape (X, Y, A)
-        per_xy = max_over_b.sum(axis=2)  # shape (X, Y)
+        bins = self._normalize_bob_outcome_bins(
+            bin_outcomes=bin_outcomes,
+            num_b=self.B_cardinality,
+        )
+        bin_masses = np.stack([slice_xy[:, idx].sum(axis=1) for idx in bins], axis=1)
+        return float(np.max(bin_masses, axis=1).sum())
+
+    def alice_optimal_average_guessing_probability(
+        self,
+        bin_outcomes: list[list[int]] | tuple[tuple[int, ...], ...] | None = None,
+    ) -> float:
+        """Return Alice's optimal guess probability averaged uniformly over all ``(x,y)``.
+
+        Set ``bin_outcomes`` to a bin partition (for example ``[[0, 1], [2, 3]]``)
+        to compute average guessing probability of binned outcomes.
+        """
+        if bin_outcomes is None:
+            max_over_b = np.max(self.data, axis=3)  # shape (X, Y, A)
+            per_xy = max_over_b.sum(axis=2)  # shape (X, Y)
+            return float(per_xy.mean())
+
+        bins = self._normalize_bob_outcome_bins(
+            bin_outcomes=bin_outcomes,
+            num_b=self.B_cardinality,
+        )
+        bin_masses = np.stack([self.data[..., idx].sum(axis=3) for idx in bins], axis=3)
+        per_xy = np.max(bin_masses, axis=3).sum(axis=2)  # shape (X, Y)
         return float(per_xy.mean())
 
     def format_probabilities(
@@ -267,6 +300,42 @@ class ContextualityScenario:
         with warnings.catch_warnings():
             warnings.simplefilter("always", UserWarning)
             warnings.warn(message, UserWarning, stacklevel=3)
+
+    @staticmethod
+    def _normalize_bob_outcome_bins(
+        bin_outcomes: list[list[int]] | tuple[tuple[int, ...], ...] | None,
+        num_b: int,
+    ) -> list[np.ndarray]:
+        """Normalize a bin-partition of Bob outcomes into validated index arrays."""
+        if bin_outcomes is None:
+            return [np.array([b], dtype=int) for b in range(num_b)]
+
+        bins: list[np.ndarray] = []
+        seen = np.full(num_b, False, dtype=bool)
+        for bin_id, outcome_group in enumerate(bin_outcomes):
+            indices = np.asarray(list(outcome_group), dtype=int).reshape(-1)
+            if indices.size == 0:
+                raise ValueError(f"bin_outcomes[{bin_id}] cannot be empty.")
+            for b in indices:
+                if b < 0 or b >= num_b:
+                    raise ValueError(f"Bob outcome index {int(b)} is out of range 0..{num_b - 1}.")
+                if seen[b]:
+                    raise ValueError(
+                        f"Bob outcome index {int(b)} appears in more than one bin."
+                    )
+                seen[b] = True
+            bins.append(indices)
+
+        if not bins:
+            raise ValueError("bin_outcomes must contain at least one bin.")
+        missing = np.where(~seen)[0]
+        if missing.size:
+            missing_list = ", ".join(str(int(v)) for v in missing)
+            raise ValueError(
+                "bin_outcomes must cover every Bob outcome exactly once. "
+                f"Missing: {missing_list}."
+            )
+        return bins
 
     @staticmethod
     def _normalize_opeq_array(opeqs: np.ndarray, size_1: int, size_2: int) -> np.ndarray:

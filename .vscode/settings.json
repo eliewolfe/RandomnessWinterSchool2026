@@ -1,4 +1,8 @@
-{
-    "python-envs.defaultEnvManager": "ms-python.python:conda",
-    "python-envs.defaultPackageManager": "ms-python.python:conda"
+﻿{
+    "python-envs.defaultEnvManager":  "ms-python.python:conda",
+    "python-envs.defaultPackageManager":  "ms-python.python:conda",
+    "python.condaPath":  "C:\\Users\\elupu\\miniconda3\\condabin\\conda.bat",
+    "python.defaultInterpreterPath":  "C:\\Users\\elupu\\miniconda3\\envs\\py13\\python.exe",
+    "python.terminal.activateEnvironment":  true,
+    "python-envs.terminal.autoActivationType":  "command"
 }

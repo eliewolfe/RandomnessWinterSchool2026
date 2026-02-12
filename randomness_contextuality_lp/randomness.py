@@ -19,6 +19,7 @@ def eve_optimal_guessing_probability(
     scenario: ContextualityScenario,
     x: int = 0,
     y: int = 0,
+    bin_outcomes: list[list[int]] | tuple[tuple[int, ...], ...] | None = None,
 ) -> float:
     """Compute Eve's best guessing probability for one chosen target ``(x, y)``.
 
@@ -38,7 +39,9 @@ def eve_optimal_guessing_probability(
     Input/output structure
     ----------------------
     Input is a validated ``ContextualityScenario`` and integer indices ``x`` and
-    ``y`` in range. Output is a single float in ``[0, 1]``: the LP optimum for
+    ``y`` in range. Set ``bin_outcomes`` to a partition of Bob outcomes (for
+    example ``[[0, 1], [2, 3]]``) to guess bins rather than exact outcomes.
+    Output is a single float in ``[0, 1]``: the LP optimum for
     Eve's guessing probability at that target pair.
 
     High-level implementation
@@ -52,10 +55,17 @@ def eve_optimal_guessing_probability(
     if y < 0 or y >= scenario.Y_cardinality:
         raise ValueError(f"y must be in 0..{scenario.Y_cardinality - 1}.")
 
-    return _solve_guessing_lp(scenario=scenario, target_pairs=[(x, y)])
+    return _solve_guessing_lp(
+        scenario=scenario,
+        target_pairs=[(x, y)],
+        bin_outcomes=bin_outcomes,
+    )
 
 
-def eve_optimal_average_guessing_probability(scenario: ContextualityScenario) -> float:
+def eve_optimal_average_guessing_probability(
+    scenario: ContextualityScenario,
+    bin_outcomes: list[list[int]] | tuple[tuple[int, ...], ...] | None = None,
+) -> float:
     """Compute Eve's optimal guessing probability averaged over all ``(x, y)``.
 
     Motivation
@@ -71,7 +81,9 @@ def eve_optimal_average_guessing_probability(scenario: ContextualityScenario) ->
 
     Input/output structure
     ----------------------
-    Input is one ``ContextualityScenario``. Output is one float in ``[0, 1]``
+    Input is one ``ContextualityScenario``. Set ``bin_outcomes`` to a partition
+    of Bob outcomes (for example ``[[0, 1], [2, 3]]``) to optimize bin guessing
+    rather than exact outcome guessing. Output is one float in ``[0, 1]``
     representing the LP optimum of the mean guessing objective over all settings.
 
     High-level implementation
@@ -81,7 +93,11 @@ def eve_optimal_average_guessing_probability(scenario: ContextualityScenario) ->
     the single-target optimization.
     """
     target_pairs = list(np.ndindex(scenario.X_cardinality, scenario.Y_cardinality))
-    return _solve_guessing_lp(scenario=scenario, target_pairs=target_pairs)
+    return _solve_guessing_lp(
+        scenario=scenario,
+        target_pairs=target_pairs,
+        bin_outcomes=bin_outcomes,
+    )
 
 
 def run_gpt_example(
@@ -250,13 +266,21 @@ def run_quantum_example(
 def _solve_guessing_lp(
     scenario: ContextualityScenario,
     target_pairs: list[tuple[int, int]],
+    bin_outcomes: list[list[int]] | tuple[tuple[int, ...], ...] | None = None,
 ) -> float:
     """Build and solve the LP for a list of target pairs."""
     num_x = scenario.X_cardinality
     num_y = scenario.Y_cardinality
     num_a = scenario.A_cardinality
     num_b = scenario.B_cardinality
-    num_e = num_b
+    bins = scenario._normalize_bob_outcome_bins(
+        bin_outcomes=bin_outcomes,
+        num_b=num_b,
+    )
+    num_e = len(bins)
+    outcome_to_bin = np.empty(num_b, dtype=int)
+    for bin_id, outcome_indices in enumerate(bins):
+        outcome_to_bin[outcome_indices] = bin_id
     num_targets = len(target_pairs)
 
     num_variables = num_targets * num_x * num_y * num_a * num_b * num_e
@@ -358,12 +382,13 @@ def _solve_guessing_lp(
         rhs.extend([0.0] * meas_rows_per_opeq)
 
     # Objective:
-    # average over targets of sum_b sum_a P_t(a,b,e=b|x_t,y_t).
+    # average over targets of sum_b sum_a P_t(a,b,e=bin(b)|x_t,y_t).
     obj = np.zeros(num_variables, dtype=float)
     weight = 1.0 / float(num_targets)
     for t, (target_x, target_y) in enumerate(target_pairs):
         for b, a in np.ndindex(num_b, num_a):
-            obj[var_index(t, target_x, target_y, a, b, b)] += weight
+            guessed_e = int(outcome_to_bin[b])
+            obj[var_index(t, target_x, target_y, a, b, guessed_e)] += weight
 
     with mosek.Env() as env:
         with env.Task(0, 0) as task:
