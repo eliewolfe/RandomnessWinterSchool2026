@@ -14,22 +14,24 @@ from .scenario import ContextualityScenario
 # Quantum-specific functions
 # ============================================================================
 
-def projector(ket: np.ndarray, drop_tiny_imag: bool = True) -> np.ndarray:
+def projector(ket: object, drop_tiny_imag: bool = True) -> np.ndarray:
     """Return the rank-1 projector ``|psi><psi|`` for a state vector ``ket``."""
-    vec = np.asarray(ket, dtype=complex)
-    if vec.ndim != 1:
-        raise ValueError("ket must be a 1D state vector.")
-    proj = np.outer(vec, vec.conj())
-    return np.real_if_close(proj) if drop_tiny_imag else proj
+    if _contains_sympy_entries(ket):
+        return _projector_from_ket_sympy(ket, drop_tiny_imag=drop_tiny_imag)
+    return _projector_from_ket_numpy(ket, drop_tiny_imag=drop_tiny_imag)
 
 
-def projector_hs_vector(ket: np.ndarray, drop_tiny_imag: bool = True) -> np.ndarray:
+def projector_hs_vector(ket: object, drop_tiny_imag: bool = True) -> np.ndarray:
     """Return Hilbert-Schmidt vectorization of ``|psi><psi|``.
 
     Uses ``vec(P^T)`` so vector inner products match ``Tr(PQ)`` under
     ``np.einsum(...k,...k)`` conventions used in this module.
     """
-    return _matrix_to_hs_vector(projector(ket, drop_tiny_imag=False), drop_tiny_imag=drop_tiny_imag)
+    if _contains_sympy_entries(ket):
+        proj_sym = _projector_from_ket_sympy(ket, drop_tiny_imag=False)
+        return _matrix_to_hs_vector_sympy(proj_sym, drop_tiny_imag=drop_tiny_imag)
+    proj_num = _projector_from_ket_numpy(ket, drop_tiny_imag=False)
+    return _matrix_to_hs_vector(proj_num, drop_tiny_imag=drop_tiny_imag)
 
 
 def gell_mann_matrices(d: int) -> np.ndarray:
@@ -175,6 +177,16 @@ def probability_table_from_gpt_vectors(
     Set ``normalize_source_outcomes=False`` to return the conditional table
     ``p(b|x,y,a)`` directly.
     """
+    if _contains_sympy_entries(gpt_states) or _contains_sympy_entries(gpt_effects):
+        return _probability_table_from_gpt_vectors_symbolic(
+            gpt_states=gpt_states,
+            gpt_effects=gpt_effects,
+            source_outcome_distribution=source_outcome_distribution,
+            normalize_source_outcomes=normalize_source_outcomes,
+            atol=atol,
+            drop_tiny_imag=drop_tiny_imag,
+        )
+
     states = np.asarray(gpt_states, dtype=complex)
     effects = np.asarray(gpt_effects, dtype=complex)
     if states.ndim != 3:
@@ -215,6 +227,9 @@ def discover_operational_equivalences_from_gpt_objects(
     Output:
     - shape ``(N_opeq, S, O)`` (always 3D).
     """
+    if _contains_sympy_entries(gpt_objects):
+        return _discover_operational_equivalences_from_gpt_objects_symbolic(gpt_objects, atol=atol)
+
     raw = np.asarray(gpt_objects, dtype=complex)
     if np.max(np.abs(np.imag(raw))) > atol:
         raise ValueError("gpt_objects contains significant imaginary components.")
@@ -523,6 +538,213 @@ def contextuality_scenario_from_quantum(
 # ============================================================================
 # Internal helpers
 # ============================================================================
+
+def _contains_sympy_entries(obj: object) -> bool:
+    try:
+        import sympy
+    except ImportError:
+        return False
+
+    if isinstance(obj, sympy.MatrixBase):
+        return True
+    if isinstance(obj, sympy.Basic):
+        return True
+    if isinstance(obj, np.ndarray) and obj.dtype == object:
+        return any(isinstance(entry, sympy.Basic) for entry in obj.reshape(-1))
+    if isinstance(obj, (list, tuple)):
+        return any(isinstance(entry, sympy.Basic) for entry in obj)
+    return False
+
+
+def _to_sympy_object_array(values: object) -> np.ndarray:
+    import sympy
+
+    arr = np.asarray(values, dtype=object)
+    out = np.empty(arr.shape, dtype=object)
+    for idx, entry in np.ndenumerate(arr):
+        out[idx] = sympy.sympify(entry)
+    return out
+
+
+def _sympy_numeric_complex(value: object) -> complex | None:
+    import sympy
+
+    try:
+        return complex(sympy.N(value))
+    except (TypeError, ValueError):
+        return None
+
+
+def _sympy_numeric_abs(value: object) -> float | None:
+    num = _sympy_numeric_complex(value)
+    if num is None:
+        return None
+    return float(abs(num))
+
+
+def _sympy_real_if_close(value: object, atol: float) -> object:
+    import sympy
+
+    expr = sympy.sympify(value)
+    imag_part = sympy.simplify(sympy.im(expr))
+    if imag_part.is_zero is True:
+        return sympy.simplify(sympy.re(expr))
+    imag_abs = _sympy_numeric_abs(imag_part)
+    if imag_abs is not None and imag_abs <= float(atol):
+        return sympy.simplify(sympy.re(expr))
+    return expr
+
+
+def _probability_table_from_gpt_vectors_symbolic(
+    gpt_states: np.ndarray,
+    gpt_effects: np.ndarray,
+    source_outcome_distribution: np.ndarray | None,
+    normalize_source_outcomes: bool,
+    atol: float,
+    drop_tiny_imag: bool,
+) -> np.ndarray:
+    import sympy
+
+    states = _to_sympy_object_array(gpt_states)
+    effects = _to_sympy_object_array(gpt_effects)
+    if states.ndim != 3:
+        raise ValueError("gpt_states must have shape (X, A, K).")
+    if effects.ndim != 3:
+        raise ValueError("gpt_effects must have shape (Y, B, K).")
+    if states.shape[-1] != effects.shape[-1]:
+        raise ValueError("State/effect vector dimensions do not match.")
+
+    probs = np.einsum("xak,ybk->xyab", states, effects)
+    if normalize_source_outcomes:
+        num_x, _, num_a, _ = probs.shape
+        if source_outcome_distribution is None:
+            p_a_given_x = np.empty((num_x, num_a), dtype=object)
+            p_a_given_x[:, :] = sympy.Rational(1, num_a)
+        else:
+            p_a_given_x = _to_sympy_object_array(source_outcome_distribution)
+            if p_a_given_x.shape != (num_x, num_a):
+                raise ValueError(f"source_outcome_distribution must have shape ({num_x}, {num_a}).")
+            for x in range(num_x):
+                row_sum = sympy.Integer(0)
+                for a in range(num_a):
+                    value = _sympy_real_if_close(p_a_given_x[x, a], atol=atol)
+                    numeric_value = _sympy_numeric_complex(value)
+                    if numeric_value is not None:
+                        if abs(numeric_value.imag) > float(atol):
+                            raise ValueError("source_outcome_distribution contains significant imaginary entries.")
+                        if numeric_value.real < -float(atol):
+                            raise ValueError("source_outcome_distribution contains negative entries.")
+                    p_a_given_x[x, a] = value
+                    row_sum += value
+                row_gap = sympy.simplify(row_sum - 1)
+                row_gap_abs = _sympy_numeric_abs(row_gap)
+                if row_gap.is_zero is not True and (row_gap_abs is None or row_gap_abs > float(atol)):
+                    raise ValueError("Each source_outcome_distribution[x,:] must sum to 1.")
+        probs = probs * p_a_given_x[:, np.newaxis, :, np.newaxis]
+
+    if drop_tiny_imag:
+        probs_clean = np.empty(probs.shape, dtype=object)
+        for idx, value in np.ndenumerate(probs):
+            probs_clean[idx] = _sympy_real_if_close(value, atol=atol)
+        return probs_clean
+    return probs
+
+
+def _discover_operational_equivalences_from_gpt_objects_symbolic(
+    gpt_objects: np.ndarray,
+    atol: float,
+) -> np.ndarray:
+    import sympy
+
+    raw = _to_sympy_object_array(gpt_objects)
+    if raw.ndim == 2:
+        raw = raw[np.newaxis, ...]
+    if raw.ndim != 3:
+        raise ValueError("gpt_objects must have shape (O,K) or (S,O,K).")
+
+    objects = np.empty(raw.shape, dtype=object)
+    for idx, value in np.ndenumerate(raw):
+        cleaned = _sympy_real_if_close(value, atol=atol)
+        imag_part = sympy.simplify(sympy.im(cleaned))
+        imag_abs = _sympy_numeric_abs(imag_part)
+        if imag_part.is_zero is not True and (imag_abs is None or imag_abs > float(atol)):
+            raise ValueError("gpt_objects contains significant imaginary components.")
+        objects[idx] = sympy.simplify(sympy.re(cleaned))
+
+    num_s, num_o, vec_dim = objects.shape
+    matrix = objects.reshape(num_s * num_o, vec_dim)
+    basis = null_space_basis(matrix.T, atol=atol, method="sympy")
+    return basis.reshape(-1, num_s, num_o)
+
+
+def _projector_from_ket_numpy(ket: object, drop_tiny_imag: bool = True) -> np.ndarray:
+    vec = np.asarray(ket, dtype=complex)
+    if vec.ndim != 1:
+        raise ValueError("ket must be a 1D state vector.")
+    proj = np.outer(vec, vec.conj())
+    return np.real_if_close(proj) if drop_tiny_imag else proj
+
+
+def _as_sympy_column_vector(ket: object) -> object:
+    import sympy
+
+    if isinstance(ket, sympy.MatrixBase):
+        vec = ket
+    else:
+        arr = np.asarray(ket, dtype=object)
+        if arr.ndim == 2 and 1 in arr.shape:
+            arr = arr.reshape(-1)
+        if arr.ndim != 1:
+            raise ValueError("ket must be a 1D state vector.")
+        vec = sympy.Matrix([sympy.sympify(entry) for entry in arr.tolist()])
+
+    if vec.cols == 1:
+        return vec
+    if vec.rows == 1:
+        return vec.T
+    raise ValueError("ket must be a 1D state vector.")
+
+
+def _projector_from_ket_sympy(ket: object, drop_tiny_imag: bool = True) -> np.ndarray:
+    import sympy
+
+    vec = _as_sympy_column_vector(ket)
+    proj = vec * vec.conjugate().T
+    out = np.empty((proj.rows, proj.cols), dtype=object)
+    for i in range(proj.rows):
+        for j in range(proj.cols):
+            entry = sympy.simplify(proj[i, j])
+            if drop_tiny_imag and entry.is_real is True:
+                entry = sympy.re(entry)
+            out[i, j] = entry
+    return out
+
+
+def _matrix_to_hs_vector_sympy(matrix: object, drop_tiny_imag: bool = True) -> np.ndarray:
+    import sympy
+
+    if isinstance(matrix, sympy.MatrixBase):
+        mat = matrix
+    else:
+        arr = np.asarray(matrix, dtype=object)
+        if arr.ndim != 2 or arr.shape[0] != arr.shape[1]:
+            raise ValueError("matrix must have shape (d, d).")
+        mat = sympy.Matrix(
+            [[sympy.sympify(arr[i, j]) for j in range(arr.shape[1])] for i in range(arr.shape[0])]
+        )
+
+    if mat.rows != mat.cols:
+        raise ValueError("matrix must have shape (d, d).")
+
+    vec: list[object] = []
+    for i in range(mat.rows):
+        for j in range(mat.cols):
+            entry = sympy.simplify(mat[j, i])  # vec(M^T)
+            if drop_tiny_imag and entry.is_real is True:
+                entry = sympy.re(entry)
+            vec.append(entry)
+    return np.asarray(vec, dtype=object)
+
 
 def _hs_normalize(matrix: np.ndarray) -> np.ndarray:
     norm = np.sqrt(np.trace(matrix @ matrix.conj().T).real)

@@ -3,21 +3,40 @@
 from __future__ import annotations
 
 import numpy as np
+import sympy as sp
 
 from randomness_contextuality_lp.contextuality import contextuality_robustness_to_dephasing
 from randomness_contextuality_lp.quantum import (
     discover_operational_equivalences_from_gpt_objects,
-    probability_table_from_gpt_vectors,
     projector,
     projector_hs_vector,
+    probability_table_from_gpt_vectors,
 )
 from randomness_contextuality_lp.randomness import eve_optimal_guessing_probability, run_quantum_example
 from randomness_contextuality_lp.scenario import ContextualityScenario
 
 
-def _xz_plane_ket(theta: float) -> np.ndarray:
+def _xz_plane_ket(theta: sp.Expr | float | int) -> sp.Matrix:
     """Real-amplitude qubit ket with Bloch vector in the X-Z plane."""
-    return np.array([np.cos(theta / 2.0), np.sin(theta / 2.0)], dtype=complex)
+    theta_sym = sp.sympify(theta)
+    return sp.Matrix([sp.cos(theta_sym / 2), sp.sin(theta_sym / 2)])
+
+
+def _normalize_integer_rays_symbolic(rays: np.ndarray) -> list[sp.Matrix]:
+    """Normalize integer-valued ray rows exactly using SymPy."""
+    ray_array = np.asarray(rays, dtype=int)
+    if ray_array.ndim != 2:
+        raise ValueError("rays must have shape (N, d).")
+
+    normalized_kets: list[sp.Matrix] = []
+    for row in ray_array:
+        row_sym = [sp.Integer(int(entry)) for entry in row]
+        norm_sq = sum(entry * entry for entry in row_sym)
+        if norm_sq == 0:
+            raise ValueError("Cannot normalize zero ray.")
+        norm = sp.sqrt(norm_sq)
+        normalized_kets.append(sp.Matrix([entry / norm for entry in row_sym]))
+    return normalized_kets
 
 
 def _print_title(title: str) -> None:
@@ -59,28 +78,26 @@ def _print_measurement_index_sets(measurement_indices: list[tuple[int, ...]]) ->
 def main() -> None:
     np.set_printoptions(precision=6, suppress=True)
 
-    ket0 = np.array([1.0, 0.0], dtype=complex)
-    ket1 = np.array([0.0, 1.0], dtype=complex)
-    ket_plus = (ket0 + ket1) / np.sqrt(2.0)
-    ket_minus = (ket0 - ket1) / np.sqrt(2.0)
+    ket0 = _xz_plane_ket(0)
+    ket1 = _xz_plane_ket(sp.pi)
+    ket_plus = _xz_plane_ket(sp.pi / 2)
+    ket_minus = _xz_plane_ket(-sp.pi / 2)
+
+    ket_pz_plus = _xz_plane_ket(sp.pi / 4)
+    ket_pz_minus = _xz_plane_ket(5 * sp.pi / 4)
+
+    ket_mz_plus = _xz_plane_ket(3 * sp.pi / 4)
+    ket_mz_minus = _xz_plane_ket(-sp.pi / 4)
 
     quantum_states = np.array(
-        [projector(ket0), projector(ket1), projector(ket_plus), projector(ket_minus)],
-        dtype=complex,
+        [
+            projector(ket0),
+            projector(ket1),
+            projector(ket_plus),
+            projector(ket_minus),
+        ],
+        dtype=object,
     )  # (X=4, d, d)
-
-    sigma_x = np.array([[0.0, 1.0], [1.0, 0.0]], dtype=complex)
-    sigma_z = np.array([[1.0, 0.0], [0.0, -1.0]], dtype=complex)
-
-    op_x_plus_z = (sigma_x + sigma_z) / np.sqrt(2.0)
-    eigvals_pz, eigvecs_pz = np.linalg.eigh(op_x_plus_z)
-    ket_pz_minus = eigvecs_pz[:, np.argmin(eigvals_pz)]
-    ket_pz_plus = eigvecs_pz[:, np.argmax(eigvals_pz)]
-
-    op_x_minus_z = (sigma_x - sigma_z) / np.sqrt(2.0)
-    eigvals_mz, eigvecs_mz = np.linalg.eigh(op_x_minus_z)
-    ket_mz_minus = eigvecs_mz[:, np.argmin(eigvals_mz)]
-    ket_mz_plus = eigvecs_mz[:, np.argmax(eigvals_mz)]
 
     # Example 1: effects +/-Z, +/-X, +/- (X+Z).
     effects_example_1 = np.array(
@@ -92,7 +109,7 @@ def main() -> None:
             projector(ket_pz_plus),   # +(X+Z)
             projector(ket_pz_minus),  # -(X+Z)
         ],
-        dtype=complex,
+        dtype=object,
     )
     scenario_1, _, _ = run_quantum_example(
         title="Example 1: Z, X, and (X+Z) measurements",
@@ -110,7 +127,7 @@ def main() -> None:
             projector(ket_mz_plus),   # +(X-Z)
             projector(ket_mz_minus),  # -(X-Z)
         ],
-        dtype=complex,
+        dtype=object,
     )
     scenario_2, _, _ = run_quantum_example(
         title="Example 2: (X+Z) and (X-Z) measurements",
@@ -122,19 +139,25 @@ def main() -> None:
 
     # Example 3: 6 hexagon preparations/effects in the X-Z plane.
     # Preparations are grouped into 3 settings of 2 outcomes (|A|=2).
-    thetas = np.arange(6, dtype=float) * (np.pi / 3.0)
+    thetas = [sp.Integer(k) * sp.pi / 3 for k in range(6)]
     hex_kets = [_xz_plane_ket(theta) for theta in thetas]
 
     # Pair opposite vertices so each preparation setting averages to maximally mixed.
     prep_pairs = [(0, 3), (1, 4), (2, 5)]
     measurement_indices_3 = [(0, 3), (1, 4), (2, 5)]
     gpt_states_3 = np.array(
-        [[projector_hs_vector(hex_kets[i]), projector_hs_vector(hex_kets[j])] for (i, j) in prep_pairs],
-        dtype=complex,
+        [
+            [projector_hs_vector(hex_kets[i]), projector_hs_vector(hex_kets[j])]
+            for (i, j) in prep_pairs
+        ],
+        dtype=object,
     )
     gpt_effects_3 = np.array(
-        [[projector_hs_vector(hex_kets[i]), projector_hs_vector(hex_kets[j])] for (i, j) in measurement_indices_3],
-        dtype=complex,
+        [
+            [projector_hs_vector(hex_kets[i]), projector_hs_vector(hex_kets[j])]
+            for (i, j) in measurement_indices_3
+        ],
+        dtype=object,
     )
     opeq_preps_3 = discover_operational_equivalences_from_gpt_objects(gpt_states_3)
     opeq_meas_3 = discover_operational_equivalences_from_gpt_objects(gpt_effects_3)
@@ -153,7 +176,7 @@ def main() -> None:
     # Example 4: Cabello-style 18-ray KS set in d=4, using GPT constructor directly.
     # 9 measurements, each with 4 outcomes; each effect appears in multiple measurements.
     labels = list("123456789ABCDEFGHI")
-    ray_coords = np.array(
+    cabello_rays = np.array(
         [
             [1, 0, 0, 0],   # 1
             [0, 1, 0, 0],   # 2
@@ -174,9 +197,9 @@ def main() -> None:
             [1, 0, 0, 1],   # H
             [0, 1, -1, 0],  # I
         ],
-        dtype=float,
+        dtype=int,
     )
-    ray_coords = ray_coords / np.linalg.norm(ray_coords, axis=1, keepdims=True)
+    cabello_kets = _normalize_integer_rays_symbolic(cabello_rays)
     label_to_index = {lab: i for i, lab in enumerate(labels)}
 
     contexts = [
@@ -190,17 +213,16 @@ def main() -> None:
         "79HI",
         "89DF",
     ]
-    context_indices = [tuple(label_to_index[ch] for ch in context) for context in contexts]
+    context_indices_4 = [tuple(label_to_index[ch] for ch in context) for context in contexts]
 
-    kets_4d = ray_coords.astype(complex)
-    gpt_effect_set_example_4 = np.array([projector_hs_vector(ket) for ket in kets_4d], dtype=complex)
+    gpt_effect_set_example_4 = np.array([projector_hs_vector(ket) for ket in cabello_kets], dtype=object)
     gpt_effects_grouped_example_4 = np.array(
-        [[gpt_effect_set_example_4[idx] for idx in context] for context in context_indices],
-        dtype=complex,
+        [[gpt_effect_set_example_4[idx] for idx in context] for context in context_indices_4],
+        dtype=object,
     )  # (Y=9, B=4, K)
     gpt_states_example_4 = np.array(
-        [[projector_hs_vector(kets_4d[idx]) for idx in context] for context in context_indices],
-        dtype=complex,
+        [[projector_hs_vector(cabello_kets[idx]) for idx in context] for context in context_indices_4],
+        dtype=object,
     )
     opeq_preps_4 = discover_operational_equivalences_from_gpt_objects(gpt_states_example_4)
     opeq_meas_4 = discover_operational_equivalences_from_gpt_objects(gpt_effects_grouped_example_4)
@@ -215,8 +237,8 @@ def main() -> None:
     print(scenario_4)
     # print("\nData table P(a,b|x,y):")
     # scenario_4.print_probabilities(as_p_b_given_x_y=False)
-    _print_measurement_index_sets(context_indices)
-    _print_manual_target_randomness(scenario_4, context_indices, target_pair=(0, 0))
+    _print_measurement_index_sets(context_indices_4)
+    _print_manual_target_randomness(scenario_4, context_indices_4, target_pair=(0, 0))
     _print_manual_target_robustness(scenario_4, "Example 4")
 
     # Example 5: Peres 24-ray construction restricted to 6 disjoint bases.
@@ -224,7 +246,7 @@ def main() -> None:
     # {1,2,3,4}, {5,6,7,8}, ..., {21,22,23,24}.
 
     # Peres 24 rays from the screenshot (barred digit -> negative entry).
-    peres_rays_5 = np.array(
+    peres_rays = np.array(
         [
             [2, 0, 0, 0],   # 1
             [0, 2, 0, 0],   # 2
@@ -251,15 +273,15 @@ def main() -> None:
             [0, 1, -1, 0],  # 23
             [0, 1, 1, 0],   # 24
         ],
-        dtype=float,
+        dtype=int,
     )
-    peres_kets_5 = peres_rays_5 / np.linalg.norm(peres_rays_5, axis=1, keepdims=True)
+    peres_kets = _normalize_integer_rays_symbolic(peres_rays)
 
     context_indices_5 = [tuple(range(4 * y, 4 * (y + 1))) for y in range(6)]
-    gpt_effect_set_example_5 = np.array([projector_hs_vector(ket) for ket in peres_kets_5], dtype=complex)
+    gpt_effect_set_example_5 = np.array([projector_hs_vector(ket) for ket in peres_kets], dtype=object)
     gpt_effects_grouped_example_5 = np.array(
         [[gpt_effect_set_example_5[idx] for idx in context] for context in context_indices_5],
-        dtype=complex,
+        dtype=object,
     )  # (6, 4, K)
     gpt_states_example_5 = np.array(gpt_effects_grouped_example_5, copy=True)
 

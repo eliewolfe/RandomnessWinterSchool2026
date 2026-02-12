@@ -6,7 +6,7 @@ import numpy as np
 
 
 def null_space_basis(
-    matrix: np.ndarray,
+    matrix: object,
     atol: float = 1e-9,
     method: str = "sympy",
 ) -> np.ndarray:
@@ -15,16 +15,16 @@ def null_space_basis(
     Output shape is ``(N_null, n_cols)`` with rows ``v`` satisfying ``matrix @ v = 0``.
     Supported methods: ``"numpy"``, ``"scipy"``, ``"sympy"`` (default).
     """
+    if method == "sympy":
+        return _null_space_sympy(matrix, atol=atol)
+
     mat = np.asarray(matrix, dtype=float)
     if mat.ndim != 2:
         raise ValueError("matrix must be 2D.")
-
     if method == "numpy":
         return _null_space_numpy(mat, atol=atol)
     if method == "scipy":
         return _null_space_scipy(mat, atol=atol)
-    if method == "sympy":
-        return _null_space_sympy(mat, atol=atol)
     raise ValueError("method must be one of {'numpy', 'scipy', 'sympy'}.")
 
 
@@ -98,50 +98,108 @@ def _null_space_scipy(mat: np.ndarray, atol: float) -> np.ndarray:
     return np.where(np.abs(basis_rows) <= atol, 0.0, basis_rows)
 
 
-def _null_space_sympy(mat: np.ndarray, atol: float) -> np.ndarray:
-    """Compute a null-space row basis using SymPy with numeric fallback.
-
-    The expected nullity is estimated from a numerical SVD rank test. If SymPy
-    returns a basis with inconsistent dimension (common for floating inputs), the
-    function falls back to the NumPy SVD backend.
-    """
+def _null_space_sympy(mat: object, atol: float) -> np.ndarray:
+    """Compute a null-space row basis using SymPy with NumPy-SVD validation."""
     try:
         import sympy
     except ImportError as exc:  # pragma: no cover
         raise ImportError("sympy is required for method='sympy'.") from exc
 
-    mat_clean = np.where(np.abs(mat) <= atol, 0.0, mat)
-    singular_values = np.linalg.svd(mat_clean, compute_uv=False, full_matrices=False)
-    if singular_values.size == 0:
-        expected_rank = 0
-    else:
-        tol = float(atol) * float(singular_values[0])
-        expected_rank = int(np.sum(singular_values > tol))
-    expected_nullity = int(mat_clean.shape[1] - expected_rank)
+    sym_mat = _to_sympy_matrix_preserving_symbols(mat, atol=atol, sympy_module=sympy)
+    num_cols = int(sym_mat.shape[1])
 
-    basis_cols = sympy.Matrix(mat_clean).nullspace()
-    if len(basis_cols) != expected_nullity:
-        return _null_space_numpy(mat_clean, atol=atol)
+    numpy_basis: np.ndarray | None = None
+    expected_nullity: int | None = None
+    try:
+        mat_numeric = np.asarray(sym_mat.evalf(), dtype=float)
+    except (TypeError, ValueError):
+        mat_numeric = None
+    if mat_numeric is not None:
+        mat_clean_numeric = np.where(np.abs(mat_numeric) <= atol, 0.0, mat_numeric)
+        numpy_basis = _null_space_numpy(mat_clean_numeric, atol=atol)
+        expected_nullity = int(numpy_basis.shape[0])
+
+    basis_cols = sym_mat.nullspace()
+    if expected_nullity is not None and len(basis_cols) != expected_nullity:
+        if numpy_basis is None:
+            raise RuntimeError("NumPy null-space basis missing during SymPy validation.")
+        return numpy_basis
     if not basis_cols:
-        return np.empty((0, mat_clean.shape[1]), dtype=float)
+        return np.empty((0, num_cols), dtype=float)
 
     basis_rows = np.stack(
         [
-            np.asarray(col, dtype=float).reshape(-1)
+            np.asarray(col.evalf(), dtype=float).reshape(-1)
             for col in basis_cols
         ],
         axis=0,
     )
     basis_rows = np.where(np.abs(basis_rows) <= atol, 0.0, basis_rows)
-    if basis_rows.shape[0] != expected_nullity:
-        return _null_space_numpy(mat_clean, atol=atol)
+    if expected_nullity is not None and basis_rows.shape[0] != expected_nullity:
+        if numpy_basis is None:
+            raise RuntimeError("NumPy null-space basis missing during SymPy validation.")
+        return numpy_basis
 
-    # Sanity check: basis vectors should satisfy A v = 0 up to tolerance.
-    if basis_rows.size:
-        residual = np.max(np.abs(mat_clean @ basis_rows.T))
-        if residual > 100.0 * float(atol):
-            return _null_space_numpy(mat_clean, atol=atol)
+    # Sanity checks: A v = 0 and SymPy basis matches NumPy-SVD nullspace span.
+    if mat_numeric is not None and basis_rows.size:
+        residual = np.max(np.abs(mat_numeric @ basis_rows.T))
+        residual_scale = max(1.0, np.max(np.abs(mat_numeric)), np.max(np.abs(basis_rows)))
+        if residual > 100.0 * float(atol) * residual_scale:
+            if numpy_basis is None:
+                raise RuntimeError("NumPy null-space basis missing during SymPy validation.")
+            return numpy_basis
+
+        if numpy_basis is None:
+            raise RuntimeError("NumPy null-space basis missing during SymPy validation.")
+        q_num, _ = np.linalg.qr(numpy_basis.T, mode="reduced")
+        span_residual = basis_rows - (basis_rows @ q_num) @ q_num.T
+        span_scale = max(1.0, np.max(np.abs(basis_rows)))
+        if np.max(np.abs(span_residual)) > 100.0 * float(atol) * span_scale:
+            return numpy_basis
     return basis_rows
+
+
+def _to_sympy_matrix_preserving_symbols(matrix: object, atol: float, sympy_module: object) -> object:
+    """Build a SymPy matrix while preserving symbolic entries."""
+    if isinstance(matrix, sympy_module.MatrixBase):
+        if len(matrix.shape) != 2:
+            raise ValueError("matrix must be 2D.")
+        return sympy_module.Matrix(
+            [
+                [
+                    _sympy_chop_small_numeric(matrix[i, j], atol=atol, sympy_module=sympy_module)
+                    for j in range(matrix.shape[1])
+                ]
+                for i in range(matrix.shape[0])
+            ]
+        )
+
+    arr = np.asarray(matrix, dtype=object)
+    if arr.ndim != 2:
+        raise ValueError("matrix must be 2D.")
+    return sympy_module.Matrix(
+        [
+            [
+                _sympy_chop_small_numeric(arr[i, j], atol=atol, sympy_module=sympy_module)
+                for j in range(arr.shape[1])
+            ]
+            for i in range(arr.shape[0])
+        ]
+    )
+
+
+def _sympy_chop_small_numeric(value: object, atol: float, sympy_module: object) -> object:
+    """Set tiny numeric entries to exact zero while leaving symbolic entries untouched."""
+    entry = sympy_module.sympify(value)
+    if entry.is_zero is True:
+        return sympy_module.Integer(0)
+    if entry.is_number and entry.free_symbols == set():
+        try:
+            if abs(complex(entry.evalf())) <= float(atol):
+                return sympy_module.Integer(0)
+        except TypeError:
+            pass
+    return entry
 
 
 def _independent_rows_numpy(mat: np.ndarray, atol: float) -> np.ndarray:
