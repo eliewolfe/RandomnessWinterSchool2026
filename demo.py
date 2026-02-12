@@ -53,7 +53,7 @@ def main() -> None:
         title="Example 1: Z, X, and (X+Z) measurements",
         quantum_states=quantum_states,
         quantum_effect_set=effects_example_1,
-        target_pair=(0, 0),  # target setting (x=0, y=0)
+        target_pair=(0, 2),  # target setting (x=0, y=2), i.e. (X+Z)
     )
 
     # Example 2: effects +/- (X+Z), +/- (X-Z).

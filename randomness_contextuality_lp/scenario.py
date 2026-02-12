@@ -167,6 +167,27 @@ class ContextualityScenario:
         self.validate_opeqs_multisource(self.opeq_preps)
         self.validate_opeqs_multimeter(self.opeq_meas)
 
+    def alice_optimal_guessing_probability(self, x: int = 0, y: int = 0) -> float:
+        """Return Alice's optimal guess probability for Bob's outcome at fixed ``(x,y)``.
+
+        Alice is assumed to know ``a`` and, after settings are announced, can choose
+        the best ``b`` for each ``a``. This computes:
+        ``sum_a p(a|x,y) max_b p(b|x,y,a)``.
+        """
+        if x < 0 or x >= self.X_cardinality:
+            raise ValueError(f"x must be in 0..{self.X_cardinality - 1}.")
+        if y < 0 or y >= self.Y_cardinality:
+            raise ValueError(f"y must be in 0..{self.Y_cardinality - 1}.")
+
+        # Equivalent to sum_a max_b P(a,b|x,y), avoiding division by tiny p(a|x,y).
+        return float(np.max(self.data[x, y, :, :], axis=1).sum())
+
+    def alice_optimal_average_guessing_probability(self) -> float:
+        """Return Alice's optimal guess probability averaged uniformly over all ``(x,y)``."""
+        max_over_b = np.max(self.data, axis=3)  # shape (X, Y, A)
+        per_xy = max_over_b.sum(axis=2)  # shape (X, Y)
+        return float(per_xy.mean())
+
     def format_probabilities(
         self,
         as_p_b_given_x_y: bool = False,

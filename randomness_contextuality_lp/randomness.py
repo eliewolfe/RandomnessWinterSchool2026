@@ -176,6 +176,11 @@ def run_gpt_example(
     print(f"x_target={x_target}, y_target={y_target}")
     print(f"measurement indices={measurement_indices[y_target]}")
     print(f"P_guess = {p_guess:.10f}")
+    if verbose:
+        p_guess_alice = scenario.alice_optimal_guessing_probability(x=x_target, y=y_target)
+        print("\nAlice optimal guessing probability for target setting:")
+        print(f"x_target={x_target}, y_target={y_target}")
+        print(f"P_guess = {p_guess_alice:.10f}")
     return scenario, measurement_indices, p_guess
 
 
