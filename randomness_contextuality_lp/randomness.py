@@ -9,11 +9,15 @@ import numpy as np
 
 from .scenario import ContextualityScenario
 
+def reverse_fano_bound(p_guess: float) -> float:
+    """Return a lower bound on conditional Shannon entropy in bits from guessing probability."""
+    f = math.floor(1 / p_guess)
+    c = f + 1
+    return (c * p_guess - 1) * f * math.log2(f) + (1 - f * p_guess) * c * math.log2(c)
 
 def min_entropy_bits(p_guess: float) -> float:
     """Return min-entropy in bits from guessing probability."""
     return float(-math.log2(p_guess))
-
 
 def eve_optimal_guessing_probability(
     scenario: ContextualityScenario,

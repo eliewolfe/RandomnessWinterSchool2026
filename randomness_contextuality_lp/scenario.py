@@ -13,6 +13,7 @@ from __future__ import annotations
 import warnings
 
 import numpy as np
+from scipy.stats import entropy
 
 from .linalg_utils import null_space_basis
 
@@ -233,6 +234,21 @@ class ContextualityScenario:
         bin_masses = np.stack([self.data[..., idx].sum(axis=3) for idx in bins], axis=3)
         per_xy = np.max(bin_masses, axis=3).sum(axis=2)  # shape (X, Y)
         return float(per_xy.mean())
+    
+    def conditional_entropy(
+        self,
+        x: int = 0,
+        y: int = 0,
+    ) -> float:
+        """Return the conditional entropy in bits of Bob's outcome conditioned on Alice at fixed ``(x,y)``.
+        
+        This computes:
+        ``H(B|A, x, y) = H(A, B|x, y) - H(A|x, y)``.
+        """
+
+        slice_xy = self.data[x, y, :, :]
+        p_a = slice_xy.sum(axis=1)  # shape (A,)
+        return entropy(slice_xy.flatten(), base=2, nan_policy="raise") - entropy(p_a, base=2, nan_policy="raise")
 
     def format_probabilities(
         self,
