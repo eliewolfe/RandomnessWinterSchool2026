@@ -127,15 +127,10 @@ def analyze_scenario(
     num_x = scenario.X_cardinality
     num_y = scenario.Y_cardinality
 
-    p_guess_eve_table = np.zeros((num_x, num_y), dtype=float)
-    for x, y in np.ndindex(num_x, num_y):
-        p_guess_eve = eve_optimal_guessing_probability(
-            scenario,
-            x=x,
-            y=y,
-            bin_outcomes=bin_outcomes,
-        )
-        p_guess_eve_table[x, y] = p_guess_eve
+    p_guess_eve_table = _solve_guessing_lp_hotstart_table(
+        scenario=scenario,
+        bin_outcomes=bin_outcomes,
+    )
 
     keyrate_table = np.zeros_like(p_guess_eve_table)
     for x, y in np.ndindex(num_x, num_y):
@@ -144,6 +139,169 @@ def analyze_scenario(
     scenario.p_guess_eve_table = p_guess_eve_table
     scenario.keyrate_table = keyrate_table
     return p_guess_eve_table, keyrate_table
+
+
+def _solve_guessing_lp_hotstart_table(
+    scenario: ContextualityScenario,
+    bin_outcomes: list[list[int]] | tuple[tuple[int, ...], ...] | None = None,
+) -> np.ndarray:
+    """Solve all single-target Eve objectives by re-optimizing one primal simplex task."""
+    data = scenario.data_numeric
+    opeq_preps = scenario.opeq_preps_numeric
+    opeq_meas = scenario.opeq_meas_numeric
+    num_x = scenario.X_cardinality
+    num_y = scenario.Y_cardinality
+    num_a = scenario.A_cardinality
+    num_b = scenario.B_cardinality
+    bins = scenario._normalize_bob_outcome_bins(
+        bin_outcomes=bin_outcomes,
+        num_b=num_b,
+    )
+    num_e = len(bins)
+    outcome_to_bin = np.empty(num_b, dtype=int)
+    for bin_id, outcome_indices in enumerate(bins):
+        outcome_to_bin[outcome_indices] = bin_id
+
+    num_variables = num_x * num_y * num_a * num_b * num_e
+
+    def var_index(
+        x: int | np.ndarray,
+        y: int | np.ndarray,
+        a: int | np.ndarray,
+        b: int | np.ndarray,
+        e: int | np.ndarray,
+    ) -> int | np.ndarray:
+        x_arr, y_arr, a_arr, b_arr, e_arr = np.broadcast_arrays(x, y, a, b, e)
+        idx = np.ravel_multi_index(
+            (x_arr, y_arr, a_arr, b_arr, e_arr),
+            dims=(num_x, num_y, num_a, num_b, num_e),
+        )
+        if np.ndim(idx) == 0:
+            return int(idx)
+        return idx.astype(int, copy=False)
+
+    rows_cols: list[list[int]] = []
+    rows_vals: list[list[float]] = []
+    rhs: list[float] = []
+    row_axis = slice(None), None
+    coeff_axis = None, slice(None)
+
+    # Data consistency: sum_e P(a,b,e|x,y) = P_data(a,b|x,y)
+    e_values = np.arange(num_e, dtype=int)
+    e_ones = np.ones(num_e, dtype=float)
+    for x, y, a, b in np.ndindex(num_x, num_y, num_a, num_b):
+        cols = var_index(x, y, a, b, e_values)
+        rows_cols.append(cols.tolist())
+        rows_vals.append(e_ones.tolist())
+        rhs.append(float(data[x, y, a, b]))
+
+    # Preparation OPEQs: sum_{x,a} c[x,a] P(a,b,e|x,y) = 0
+    prep_row_shape = (num_y, num_b, num_e)
+    prep_rows_per_opeq = int(np.prod(prep_row_shape))
+    prep_y, prep_b, prep_e = np.unravel_index(
+        np.arange(prep_rows_per_opeq, dtype=int),
+        prep_row_shape,
+    )
+    for coeffs in opeq_preps:
+        x_nonzero, a_nonzero = np.nonzero(coeffs)
+        coeff_nonzero = coeffs[x_nonzero, a_nonzero].astype(float)
+        if coeff_nonzero.size == 0:
+            continue
+
+        cols_matrix = var_index(
+            x_nonzero[coeff_axis],
+            prep_y[row_axis],
+            a_nonzero[coeff_axis],
+            prep_b[row_axis],
+            prep_e[row_axis],
+        )
+        vals_matrix = np.broadcast_to(
+            coeff_nonzero[coeff_axis],
+            cols_matrix.shape,
+        )
+        rows_cols.extend(cols_matrix.tolist())
+        rows_vals.extend(vals_matrix.tolist())
+        rhs.extend([0.0] * prep_rows_per_opeq)
+
+    # Measurement OPEQs: sum_{y,b} d[y,b] P(a,b,e|x,y) = 0
+    meas_row_shape = (num_x, num_a, num_e)
+    meas_rows_per_opeq = int(np.prod(meas_row_shape))
+    meas_x, meas_a, meas_e = np.unravel_index(
+        np.arange(meas_rows_per_opeq, dtype=int),
+        meas_row_shape,
+    )
+    for coeffs in opeq_meas:
+        y_nonzero, b_nonzero = np.nonzero(coeffs)
+        coeff_nonzero = coeffs[y_nonzero, b_nonzero].astype(float)
+        if coeff_nonzero.size == 0:
+            continue
+
+        cols_matrix = var_index(
+            meas_x[row_axis],
+            y_nonzero[coeff_axis],
+            meas_a[row_axis],
+            b_nonzero[coeff_axis],
+            meas_e[row_axis],
+        )
+        vals_matrix = np.broadcast_to(
+            coeff_nonzero[coeff_axis],
+            cols_matrix.shape,
+        )
+        rows_cols.extend(cols_matrix.tolist())
+        rows_vals.extend(vals_matrix.tolist())
+        rhs.extend([0.0] * meas_rows_per_opeq)
+
+    objective_indices: dict[tuple[int, int], np.ndarray] = {}
+    for target_x, target_y in np.ndindex(num_x, num_y):
+        idx_list: list[int] = []
+        for b, a in np.ndindex(num_b, num_a):
+            guessed_e = int(outcome_to_bin[b])
+            idx_list.append(var_index(target_x, target_y, a, b, guessed_e))
+        objective_indices[(target_x, target_y)] = np.asarray(idx_list, dtype=int)
+
+    p_guess_table = np.zeros((num_x, num_y), dtype=float)
+    with mosek.Env() as env:
+        with env.Task(0, 0) as task:
+            task.appendvars(num_variables)
+            task.putvarboundsliceconst(0, num_variables, mosek.boundkey.lo, 0.0, 0.0)
+
+            num_constraints = len(rows_cols)
+            task.appendcons(num_constraints)
+            for row_index in range(num_constraints):
+                task.putarow(row_index, rows_cols[row_index], rows_vals[row_index])
+                row_rhs = rhs[row_index]
+                task.putconbound(row_index, mosek.boundkey.fx, row_rhs, row_rhs)
+
+            task.putintparam(mosek.iparam.optimizer, mosek.optimizertype.primal_simplex)
+            task.putintparam(mosek.iparam.sim_hotstart, mosek.simhotstart.status_keys)
+            task.putobjsense(mosek.objsense.maximize)
+
+            previous_idx: np.ndarray | None = None
+            for target_x, target_y in np.ndindex(num_x, num_y):
+                if previous_idx is not None and previous_idx.size:
+                    task.putclist(previous_idx.tolist(), [0.0] * int(previous_idx.size))
+
+                current_idx = objective_indices[(target_x, target_y)]
+                task.putclist(current_idx.tolist(), [1.0] * int(current_idx.size))
+                task.optimize()
+                p_guess_table[target_x, target_y] = _get_optimal_primal_objective(task)
+                previous_idx = current_idx
+    return p_guess_table
+
+
+def _get_optimal_primal_objective(task: mosek.Task) -> float:
+    """Extract an optimal LP objective from MOSEK task solutions."""
+    acceptable_statuses = {mosek.solsta.optimal}
+    if hasattr(mosek.solsta, "integer_optimal"):
+        acceptable_statuses.add(mosek.solsta.integer_optimal)
+    for soltype in (mosek.soltype.itr, mosek.soltype.bas):
+        try:
+            solsta = task.getsolsta(soltype)
+        except mosek.Error:
+            continue
+        if solsta in acceptable_statuses:
+            return float(task.getprimalobj(soltype))
+    raise RuntimeError("LP solve failed: MOSEK did not return an optimal solution.")
 
 
 def _solve_guessing_lp(
@@ -293,18 +451,9 @@ def _solve_guessing_lp(
             if obj_idx:
                 task.putclist(obj_idx, obj_val)
 
+            task.putintparam(mosek.iparam.optimizer, mosek.optimizertype.primal_simplex)
             task.putobjsense(mosek.objsense.maximize)
             task.optimize()
-
-            acceptable_statuses = {mosek.solsta.optimal}
-            if hasattr(mosek.solsta, "integer_optimal"):
-                acceptable_statuses.add(mosek.solsta.integer_optimal)
-            for soltype in (mosek.soltype.itr, mosek.soltype.bas):
-                try:
-                    solsta = task.getsolsta(soltype)
-                except mosek.Error:
-                    continue
-                if solsta in acceptable_statuses:
-                    return float(task.getprimalobj(soltype))
+            return _get_optimal_primal_objective(task)
 
     raise RuntimeError("LP solve failed: MOSEK did not return an optimal solution.")
