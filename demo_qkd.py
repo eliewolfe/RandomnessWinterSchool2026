@@ -1,4 +1,4 @@
-"""End-to-end demos using direct quantum -> scenario constructors."""
+"""QKD-focused end-to-end demos with clustered preparations in all examples."""
 
 from __future__ import annotations
 
@@ -61,10 +61,12 @@ def _print_guessing_probability_grids(
     precision: int = 3,
     include_keyrate_pairs: bool = True,
     keyrate_threshold: float = 0.1,
+    tampering: bool = False,
 ) -> None:
     p_guess_eve, keyrate_table = analyze_scenario(
         scenario=scenario,
         bin_outcomes=bin_outcomes,
+        tampering=tampering,
     )
     num_x = scenario.X_cardinality
     num_y = scenario.Y_cardinality
@@ -172,11 +174,11 @@ def main() -> None:
     ket_mz_plus = _xz_plane_ket(3 * sp.pi / 4)
     ket_mz_minus = _xz_plane_ket(-sp.pi / 4)
 
-    # Example 1: +/-Z, +/-X, and +/- (X+Z), with explicit preparation/measurement groupings.
+    # Example 1: +/-Z, +/-X, and +/- (X+Z), with antipodal preparation clustering.
     _print_title("Example 1: Z, X, and (X+Z) measurements")
     state_kets_example_1 = [ket0, ket1, ket_plus, ket_minus]
     effect_kets_example_1 = [ket0, ket1, ket_plus, ket_minus, ket_pz_plus, ket_pz_minus]
-    preparation_indices_example_1 = [(0,), (1,), (2,), (3,)]
+    preparation_indices_example_1 = [(0, 1), (2, 3)]
     measurement_indices_example_1 = [(0, 1), (2, 3), (4, 5)]
 
     gpt_state_set_example_1 = np.array([projector_hs_vector(ket) for ket in state_kets_example_1], dtype=object)
@@ -197,24 +199,23 @@ def main() -> None:
     _print_preparation_index_sets(preparation_indices_example_1)
     _print_measurement_index_sets(measurement_indices_example_1)
     _print_measurement_operational_equivalences(scenario_example_1)
-    print("\nSymbolic probability table p(b|x,y):")
+    print("\nSymbolic probability table P(a,b|x,y):")
     scenario_example_1.print_probabilities(
-        as_p_b_given_x_y=True,
+        as_p_b_given_x_y=False,
         precision=3,
         representation="symbolic",
     )
     _print_guessing_probability_grids(
         scenario_example_1,
         measurement_indices_example_1,
-        include_keyrate_pairs=False,
     )
     _print_manual_target_robustness(scenario_example_1, "Example 1")
 
-    # Example 2: +/- (X+Z), +/- (X-Z), with explicit preparation/measurement groupings.
+    # Example 2: +/- (X+Z), +/- (X-Z), with antipodal preparation clustering.
     _print_title("Example 2: (X+Z) and (X-Z) measurements")
     state_kets_example_2 = [ket0, ket1, ket_plus, ket_minus]
     effect_kets_example_2 = [ket_pz_plus, ket_pz_minus, ket_mz_plus, ket_mz_minus]
-    preparation_indices_example_2 = [(0,), (1,), (2,), (3,)]
+    preparation_indices_example_2 = [(0, 1), (2, 3)]
     measurement_indices_example_2 = [(0, 1), (2, 3)]
 
     gpt_state_set_example_2 = np.array([projector_hs_vector(ket) for ket in state_kets_example_2], dtype=object)
@@ -235,16 +236,15 @@ def main() -> None:
     _print_preparation_index_sets(preparation_indices_example_2)
     _print_measurement_index_sets(measurement_indices_example_2)
     _print_measurement_operational_equivalences(scenario_example_2)
-    print("\nSymbolic probability table p(b|x,y):")
+    print("\nSymbolic probability table P(a,b|x,y):")
     scenario_example_2.print_probabilities(
-        as_p_b_given_x_y=True,
+        as_p_b_given_x_y=False,
         precision=3,
         representation="symbolic",
     )
     _print_guessing_probability_grids(
         scenario_example_2,
         measurement_indices_example_2,
-        include_keyrate_pairs=False,
     )
     _print_manual_target_robustness(scenario_example_2, "Example 2")
 

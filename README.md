@@ -49,13 +49,17 @@ Notes:
 
 ## Quick Start
 
-Run the full demonstration script:
+Run the two demonstration scripts:
 
 ```bash
-python demo.py
+python demo_randomness.py
+python demo_qkd.py
 ```
 
-See `demo.py` for five end-to-end examples, from simple qubit scenarios to Cabello and Peres-style constructions.
+`demo_randomness.py` and `demo_qkd.py` both cover five end-to-end examples, from simple qubit scenarios to Cabello and Peres-style constructions:
+
+- `demo_randomness.py`: unclustered preparations (`|A|=1` always), randomness-focused reporting.
+- `demo_qkd.py`: clustered preparations (QKD-style source groupings), includes key-rate pairings.
 
 ## Conceptual Pipeline
 
@@ -64,7 +68,7 @@ High-level flow:
 1. Prepare data as `P(a,b|x,y)` and OPEQs, or construct these from quantum/GPT inputs.
 2. Build a `ContextualityScenario`.
 3. Run one or both analyses:
-   - `eve_optimal_guessing_probability` / `eve_optimal_average_guessing_probability`
+   - `eve_optimal_guessing_probability` / `eve_optimal_average_guessing_probability` / `analyze_scenario`
    - `contextuality_robustness_to_dephasing`
 
 ## Data and OPEQ Conventions
@@ -182,11 +186,13 @@ Main functions:
 
 - `eve_optimal_guessing_probability(scenario, x, y)`
 - `eve_optimal_average_guessing_probability(scenario)`
+- `analyze_scenario(scenario)` (fills Eve guessing and key-rate tables)
 - `min_entropy_bits(p_guess)`
-- `alice_optimal_guessing_min_entropy_bits(scenario, x, y)`
-- `alice_optimal_average_guessing_min_entropy_bits(scenario)`
-- `alice_conditional_entropy_bits(scenario, x, y)`
-- `alice_average_conditional_entropy_bits(scenario)`
+
+Notes:
+
+- `tampering=False` is the default across Eve LP entry points.
+- Alice-side guessing and conditional-entropy helpers now live on `ContextualityScenario` in `scenario.py`.
 
 ### `contextuality.py`
 
@@ -327,28 +333,22 @@ Interpretation used in demo:
 - larger `r*` means more contextuality (more dephasing needed to reach noncontextual explainability).
 - `r*` near 0 indicates simplex embeddability already (or nearly) present.
 
-## Demo Guide (`demo.py`)
+## Demo Guide (`demo_randomness.py`, `demo_qkd.py`)
 
-`demo.py` is the best practical tour of the package.
+The demos are split by use case.
 
-It currently demonstrates:
+Both scripts demonstrate the same five scenario families:
 
 1. **Example 1**: qubit Z/X/(X+Z), with inferred measurements and targeted randomness.
 2. **Example 2**: qubit (X+Z)/(X-Z), contrasting randomness with Example 1.
-3. **Example 3**: hexagon GPT construction with `|A|=2` (multi-outcome source), manual grouped preparations/effects.
+3. **Example 3**: hexagon GPT construction, manual grouped effects (and grouped preparations in QKD demo).
 4. **Example 4**: Cabello-style 18-ray GPT construction, repeated effects across contexts, manual grouping.
 5. **Example 5**: Peres 24-ray construction restricted to the 6 Mermin-square contexts (disjoint 4-outcome bases).
 
-Helper functions used in demo:
+How the two scripts differ:
 
-- `_print_guessing_probability_grids(...)`:
-  - prints Eve and Alice guessing-probability grids over all `(x,y)` pairs.
-- `_print_manual_target_robustness(...)`:
-  - prints `r*` robustness and interpretation.
-- `_print_measurement_index_sets(...)`:
-  - prints manually supplied measurement context indices.
-
-The demo uses explicit low-level construction (`ContextualityScenario(...)`) from manually computed GPT objects.
+- `demo_randomness.py`: no preparation clustering (`|A|=1`) and no key-rate reporting.
+- `demo_qkd.py`: clustered preparations for all examples and key-rate pair reporting.
 
 ## Minimal Usage Patterns
 
@@ -413,14 +413,15 @@ r_star = contextuality_robustness_to_dephasing(scenario)
   - `contextuality.py`: simplex embeddability and robustness LP
   - `linalg_utils.py`: nullspace/independence/extremal-ray helper wrappers
   - `extremal_finders.py`: CDD/MOSEK cone conversion backends
-- `demo.py`: end-to-end examples
+- `demo_randomness.py`: end-to-end randomness demos with unclustered preparations
+- `demo_qkd.py`: end-to-end QKD-oriented demos with clustered preparations
 - `pyproject.toml`: metadata and dependencies
 - `requirements.txt`: runtime dependencies
 
 ## Practical Notes
 
 - Measurement inference from a flat effect set is combinatorial in the number of effects; constrain with `outcomes_per_measurement` when possible.
-- If you already know measurement contexts, you can bypass automatic detection and directly build grouped objects (as in `demo.py` Examples 3 and 4).
+- If you already know measurement contexts, you can bypass automatic detection and directly build grouped objects (as in Examples 3-5 in both demo scripts).
 - `contextuality_scenario_from_quantum(...)` automatically uses a projector fast path when applicable.
 - For advanced cone work, import directly from `randomness_contextuality_lp.extremal_finders`.
 - For strict consistency checks, call `scenario.sanity_check()`.
