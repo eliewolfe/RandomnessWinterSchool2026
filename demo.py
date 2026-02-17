@@ -8,11 +8,10 @@ import sympy as sp
 from randomness_contextuality_lp.contextuality import contextuality_robustness_to_dephasing
 from randomness_contextuality_lp.quantum import (
     discover_operational_equivalences_from_gpt_objects,
-    projector,
     projector_hs_vector,
     probability_table_from_gpt_vectors,
 )
-from randomness_contextuality_lp.randomness import eve_optimal_guessing_probability, run_quantum_example
+from randomness_contextuality_lp.randomness import analyze_scenario
 from randomness_contextuality_lp.scenario import ContextualityScenario
 
 
@@ -45,42 +44,68 @@ def _print_title(title: str) -> None:
     print("=" * 80)
 
 
-def _print_manual_target_randomness(
+def _format_decimal(value: float, decimals: int = 3) -> str:
+    rounded = round(float(value), decimals)
+    if abs(rounded) < 10 ** (-decimals):
+        rounded = 0.0
+    text = f"{rounded:.{decimals}f}".rstrip("0").rstrip(".")
+    if text in {"-0", ""}:
+        return "0"
+    return text
+
+
+def _print_guessing_probability_grids(
     scenario: ContextualityScenario,
     measurement_indices: list[tuple[int, ...]],
-    target_pair: tuple[int, int],
     bin_outcomes: list[list[int]] | tuple[tuple[int, ...], ...] | None = None,
+    precision: int = 3,
+    include_keyrate_pairs: bool = True,
+    keyrate_threshold: float = 0.1,
 ) -> None:
-    x_target, y_target = target_pair
-    p_guess_eve = eve_optimal_guessing_probability(
-        scenario,
-        x=x_target,
-        y=y_target,
+    p_guess_eve, keyrate_table = analyze_scenario(
+        scenario=scenario,
         bin_outcomes=bin_outcomes,
     )
-    p_guess_alice = scenario.alice_optimal_guessing_probability(
-        x=x_target,
-        y=y_target,
-        bin_outcomes=bin_outcomes,
-    )
+    num_x = scenario.X_cardinality
+    num_y = scenario.Y_cardinality
+    p_guess_alice = np.empty((num_x, num_y), dtype=float)
+
+    for x, y in np.ndindex(num_x, num_y):
+        p_guess_alice[x, y] = scenario.alice_optimal_guessing_probability(
+            x=x,
+            y=y,
+            bin_outcomes=bin_outcomes,
+        )
+
+    float_formatter = {"float_kind": lambda value: _format_decimal(value, decimals=precision)}
     target_label = "Bob's outcome bins" if bin_outcomes is not None else "Bob's outcome"
-    print(f"\nEve optimal guessing probability for {target_label} at target setting:")
-    print(f"x_target={x_target}, y_target={y_target}")
-    print(f"measurement indices={measurement_indices[y_target]}")
-    if bin_outcomes is not None:
-        print(f"bins={bin_outcomes}")
-    print(f"P_guess = {p_guess_eve:.10f}")
-    print(f"\nAlice optimal guessing probability for {target_label} at target setting:")
-    print(f"x_target={x_target}, y_target={y_target}")
-    if bin_outcomes is not None:
-        print(f"bins={bin_outcomes}")
-    print(f"P_guess = {p_guess_alice:.10f}")
+    print(f"\nEve optimal guessing probabilities for {target_label} (rows: x, columns: y):")
+    print(np.array2string(p_guess_eve, formatter=float_formatter))
+    print(f"\nAlice optimal guessing probabilities for {target_label} (rows: x, columns: y):")
+    print(np.array2string(p_guess_alice, formatter=float_formatter))
+    if include_keyrate_pairs:
+        qualifying_pairs = [
+            (x, y, keyrate_table[x, y])
+            for x, y in np.ndindex(num_x, num_y)
+            if keyrate_table[x, y] > keyrate_threshold
+        ]
+        print(
+            "\nStrictly-positive key rate pairings:"
+        )
+        if not qualifying_pairs:
+            print("none")
+        else:
+            for x, y, value in qualifying_pairs:
+                print(
+                    f"(x={x}, y={y}) -> "
+                    f"{_format_decimal(float(value), decimals=precision)}"
+                )
 
 
 def _print_manual_target_robustness(scenario: ContextualityScenario, example_label: str) -> None:
     robustness = contextuality_robustness_to_dephasing(scenario)
     print(f"\nContextuality robustness to dephasing ({example_label}):")
-    print(f"r* = {robustness:.10f}")
+    print(f"r* = {_format_decimal(robustness, decimals=3)}")
     print("Interpretation: larger r* means more contextual (more dephasing needed to classicalize).")
 
 
@@ -88,6 +113,49 @@ def _print_measurement_index_sets(measurement_indices: list[tuple[int, ...]]) ->
     print("\nProvided measurement index sets (no inference):")
     for y, idx in enumerate(measurement_indices):
         print(f"y={y}: effects {idx}")
+
+
+def _print_preparation_index_sets(preparation_indices: list[tuple[int, ...]]) -> None:
+    print("\nProvided preparation index sets (no inference):")
+    for x, idx in enumerate(preparation_indices):
+        print(f"x={x}: preparations {idx}")
+
+
+def _print_measurement_operational_equivalences(
+    scenario: ContextualityScenario,
+    precision: int = 3,
+) -> None:
+    print()
+    scenario.print_measurement_operational_equivalences(
+        precision=precision,
+        representation="symbolic",
+    )
+
+
+def _group_gpt_vectors(
+    gpt_vector_set: np.ndarray,
+    grouped_indices: list[tuple[int, ...]],
+) -> np.ndarray:
+    return np.array(
+        [[gpt_vector_set[idx] for idx in index_group] for index_group in grouped_indices],
+        dtype=object,
+    )
+
+
+def _build_manual_scenario_from_grouped_gpt(
+    gpt_states_grouped: np.ndarray,
+    gpt_effects_grouped: np.ndarray,
+    verbose: bool = False,
+) -> ContextualityScenario:
+    data_symbolic = probability_table_from_gpt_vectors(gpt_states_grouped, gpt_effects_grouped)
+    opeq_preps_symbolic = discover_operational_equivalences_from_gpt_objects(gpt_states_grouped)
+    opeq_meas_symbolic = discover_operational_equivalences_from_gpt_objects(gpt_effects_grouped)
+    return ContextualityScenario(
+        data=data_symbolic,
+        opeq_preps=opeq_preps_symbolic,
+        opeq_meas=opeq_meas_symbolic,
+        verbose=verbose,
+    )
 
 
 def main() -> None:
@@ -104,89 +172,118 @@ def main() -> None:
     ket_mz_plus = _xz_plane_ket(3 * sp.pi / 4)
     ket_mz_minus = _xz_plane_ket(-sp.pi / 4)
 
-    quantum_states = np.array(
-        [
-            projector(ket0),
-            projector(ket1),
-            projector(ket_plus),
-            projector(ket_minus),
-        ],
-        dtype=object,
-    )  # (X=4, d, d)
+    # Example 1: +/-Z, +/-X, and +/- (X+Z), with explicit preparation/measurement groupings.
+    _print_title("Example 1: Z, X, and (X+Z) measurements")
+    state_kets_example_1 = [ket0, ket1, ket_plus, ket_minus]
+    effect_kets_example_1 = [ket0, ket1, ket_plus, ket_minus, ket_pz_plus, ket_pz_minus]
+    preparation_indices_example_1 = [(0,), (1,), (2,), (3,)]
+    measurement_indices_example_1 = [(0, 1), (2, 3), (4, 5)]
 
-    # Example 1: effects +/-Z, +/-X, +/- (X+Z).
-    effects_example_1 = np.array(
-        [
-            projector(ket0),       # +Z
-            projector(ket1),       # -Z
-            projector(ket_plus),   # +X
-            projector(ket_minus),  # -X
-            projector(ket_pz_plus),   # +(X+Z)
-            projector(ket_pz_minus),  # -(X+Z)
-        ],
-        dtype=object,
+    gpt_state_set_example_1 = np.array([projector_hs_vector(ket) for ket in state_kets_example_1], dtype=object)
+    gpt_effect_set_example_1 = np.array([projector_hs_vector(ket) for ket in effect_kets_example_1], dtype=object)
+    gpt_states_grouped_example_1 = _group_gpt_vectors(
+        gpt_state_set_example_1,
+        preparation_indices_example_1,
     )
-    scenario_1, _, _ = run_quantum_example(
-        title="Example 1: Z, X, and (X+Z) measurements",
-        quantum_states=quantum_states,
-        quantum_effect_set=effects_example_1,
-        target_pair=(0, 2),  # target setting (x=0, y=2), i.e. (X+Z)
+    gpt_effects_grouped_example_1 = _group_gpt_vectors(
+        gpt_effect_set_example_1,
+        measurement_indices_example_1,
     )
-    _print_manual_target_robustness(scenario_1, "Example 1")
+    scenario_example_1 = _build_manual_scenario_from_grouped_gpt(
+        gpt_states_grouped_example_1,
+        gpt_effects_grouped_example_1,
+        verbose=False,
+    )
+    _print_preparation_index_sets(preparation_indices_example_1)
+    _print_measurement_index_sets(measurement_indices_example_1)
+    _print_measurement_operational_equivalences(scenario_example_1)
+    print("\nSymbolic probability table p(b|x,y):")
+    scenario_example_1.print_probabilities(
+        as_p_b_given_x_y=True,
+        precision=3,
+        representation="symbolic",
+    )
+    _print_guessing_probability_grids(
+        scenario_example_1,
+        measurement_indices_example_1,
+        include_keyrate_pairs=False,
+    )
+    _print_manual_target_robustness(scenario_example_1, "Example 1")
 
-    # Example 2: effects +/- (X+Z), +/- (X-Z).
-    effects_example_2 = np.array(
-        [
-            projector(ket_pz_plus),   # +(X+Z)
-            projector(ket_pz_minus),  # -(X+Z)
-            projector(ket_mz_plus),   # +(X-Z)
-            projector(ket_mz_minus),  # -(X-Z)
-        ],
-        dtype=object,
-    )
-    scenario_2, _, _ = run_quantum_example(
-        title="Example 2: (X+Z) and (X-Z) measurements",
-        quantum_states=quantum_states,
-        quantum_effect_set=effects_example_2,
-        target_pair=(0, 1),  # target setting (x=0, y=1)
-    )
-    _print_manual_target_robustness(scenario_2, "Example 2")
+    # Example 2: +/- (X+Z), +/- (X-Z), with explicit preparation/measurement groupings.
+    _print_title("Example 2: (X+Z) and (X-Z) measurements")
+    state_kets_example_2 = [ket0, ket1, ket_plus, ket_minus]
+    effect_kets_example_2 = [ket_pz_plus, ket_pz_minus, ket_mz_plus, ket_mz_minus]
+    preparation_indices_example_2 = [(0,), (1,), (2,), (3,)]
+    measurement_indices_example_2 = [(0, 1), (2, 3)]
 
-    # Example 3: 6 hexagon preparations/effects in the X-Z plane.
-    # Preparations are grouped into 3 settings of 2 outcomes (|A|=2).
+    gpt_state_set_example_2 = np.array([projector_hs_vector(ket) for ket in state_kets_example_2], dtype=object)
+    gpt_effect_set_example_2 = np.array([projector_hs_vector(ket) for ket in effect_kets_example_2], dtype=object)
+    gpt_states_grouped_example_2 = _group_gpt_vectors(
+        gpt_state_set_example_2,
+        preparation_indices_example_2,
+    )
+    gpt_effects_grouped_example_2 = _group_gpt_vectors(
+        gpt_effect_set_example_2,
+        measurement_indices_example_2,
+    )
+    scenario_example_2 = _build_manual_scenario_from_grouped_gpt(
+        gpt_states_grouped_example_2,
+        gpt_effects_grouped_example_2,
+        verbose=False,
+    )
+    _print_preparation_index_sets(preparation_indices_example_2)
+    _print_measurement_index_sets(measurement_indices_example_2)
+    _print_measurement_operational_equivalences(scenario_example_2)
+    print("\nSymbolic probability table p(b|x,y):")
+    scenario_example_2.print_probabilities(
+        as_p_b_given_x_y=True,
+        precision=3,
+        representation="symbolic",
+    )
+    _print_guessing_probability_grids(
+        scenario_example_2,
+        measurement_indices_example_2,
+        include_keyrate_pairs=False,
+    )
+    _print_manual_target_robustness(scenario_example_2, "Example 2")
+
+    # Example 3: 6 hexagon preparations/effects in the X-Z plane, grouped into 3 settings of 2 outcomes.
     thetas = [sp.Integer(k) * sp.pi / 3 for k in range(6)]
-    hex_kets = [_xz_plane_ket(theta) for theta in thetas]
+    state_kets_example_3 = [_xz_plane_ket(theta) for theta in thetas]
+    effect_kets_example_3 = list(state_kets_example_3)
 
     # Pair opposite vertices so each preparation setting averages to maximally mixed.
-    prep_pairs = [(0, 3), (1, 4), (2, 5)]
-    measurement_indices_3 = [(0, 3), (1, 4), (2, 5)]
-    gpt_states_3 = np.array(
-        [
-            [projector_hs_vector(hex_kets[i]), projector_hs_vector(hex_kets[j])]
-            for (i, j) in prep_pairs
-        ],
-        dtype=object,
+    preparation_indices_example_3 = [(0, 3), (1, 4), (2, 5)]
+    measurement_indices_example_3 = [(0, 3), (1, 4), (2, 5)]
+
+    gpt_state_set_example_3 = np.array([projector_hs_vector(ket) for ket in state_kets_example_3], dtype=object)
+    gpt_effect_set_example_3 = np.array([projector_hs_vector(ket) for ket in effect_kets_example_3], dtype=object)
+    gpt_states_grouped_example_3 = _group_gpt_vectors(
+        gpt_state_set_example_3,
+        preparation_indices_example_3,
     )
-    gpt_effects_3 = np.array(
-        [
-            [projector_hs_vector(hex_kets[i]), projector_hs_vector(hex_kets[j])]
-            for (i, j) in measurement_indices_3
-        ],
-        dtype=object,
+    gpt_effects_grouped_example_3 = _group_gpt_vectors(
+        gpt_effect_set_example_3,
+        measurement_indices_example_3,
     )
-    opeq_preps_3 = discover_operational_equivalences_from_gpt_objects(gpt_states_3)
-    opeq_meas_3 = discover_operational_equivalences_from_gpt_objects(gpt_effects_3)
-    data_3 = probability_table_from_gpt_vectors(gpt_states_3, gpt_effects_3)
     _print_title("Example 3: Hexagon states/effects in X-Z plane (|A|=2)")
-    scenario_3 = ContextualityScenario(
-        data=np.real_if_close(data_3).astype(float),
-        opeq_preps=np.real_if_close(opeq_preps_3).astype(float),
-        opeq_meas=np.real_if_close(opeq_meas_3).astype(float),
-        verbose=True,
+    scenario_example_3 = _build_manual_scenario_from_grouped_gpt(
+        gpt_states_grouped_example_3,
+        gpt_effects_grouped_example_3,
+        verbose=False,
     )
-    _print_measurement_index_sets(measurement_indices_3)
-    _print_manual_target_randomness(scenario_3, measurement_indices_3, target_pair=(0, 0))
-    _print_manual_target_robustness(scenario_3, "Example 3")
+    _print_preparation_index_sets(preparation_indices_example_3)
+    _print_measurement_index_sets(measurement_indices_example_3)
+    _print_measurement_operational_equivalences(scenario_example_3)
+    print("\nSymbolic probability table P(a,b|x,y):")
+    scenario_example_3.print_probabilities(
+        as_p_b_given_x_y=False,
+        precision=3,
+        representation="symbolic",
+    )
+    _print_guessing_probability_grids(scenario_example_3, measurement_indices_example_3)
+    _print_manual_target_robustness(scenario_example_3, "Example 3")
 
     # Example 4: Cabello-style 18-ray KS set in d=4, using GPT constructor directly.
     # 9 measurements, each with 4 outcomes; each effect appears in multiple measurements.
@@ -228,33 +325,34 @@ def main() -> None:
         "79HI",
         "89DF",
     ]
-    context_indices_4 = [tuple(label_to_index[ch] for ch in context) for context in contexts]
+    preparation_indices_example_4 = [tuple(label_to_index[ch] for ch in context) for context in contexts]
+    measurement_indices_example_4 = list(preparation_indices_example_4)
 
+    gpt_state_set_example_4 = np.array([projector_hs_vector(ket) for ket in cabello_kets], dtype=object)
     gpt_effect_set_example_4 = np.array([projector_hs_vector(ket) for ket in cabello_kets], dtype=object)
-    gpt_effects_grouped_example_4 = np.array(
-        [[gpt_effect_set_example_4[idx] for idx in context] for context in context_indices_4],
-        dtype=object,
-    )  # (Y=9, B=4, K)
-    gpt_states_example_4 = np.array(
-        [[projector_hs_vector(cabello_kets[idx]) for idx in context] for context in context_indices_4],
-        dtype=object,
+    gpt_states_grouped_example_4 = _group_gpt_vectors(
+        gpt_state_set_example_4,
+        preparation_indices_example_4,
     )
-    opeq_preps_4 = discover_operational_equivalences_from_gpt_objects(gpt_states_example_4)
-    opeq_meas_4 = discover_operational_equivalences_from_gpt_objects(gpt_effects_grouped_example_4)
-    data_4 = probability_table_from_gpt_vectors(gpt_states_example_4, gpt_effects_grouped_example_4)
+    gpt_effects_grouped_example_4 = _group_gpt_vectors(
+        gpt_effect_set_example_4,
+        measurement_indices_example_4,
+    )
+
     _print_title("Example 4: Cabello 18-ray KS set via GPT constructor (9 x 4 contexts)")
-    scenario_4 = ContextualityScenario(
-        data=np.real_if_close(data_4).astype(float),
-        opeq_preps=np.real_if_close(opeq_preps_4).astype(float),
-        opeq_meas=np.real_if_close(opeq_meas_4).astype(float),
+    scenario_example_4 = _build_manual_scenario_from_grouped_gpt(
+        gpt_states_grouped_example_4,
+        gpt_effects_grouped_example_4,
         verbose=False,
     )
-    print(scenario_4)
+    print(scenario_example_4)
     # print("\nData table P(a,b|x,y):")
     # scenario_4.print_probabilities(as_p_b_given_x_y=False)
-    _print_measurement_index_sets(context_indices_4)
-    _print_manual_target_randomness(scenario_4, context_indices_4, target_pair=(0, 0))
-    _print_manual_target_robustness(scenario_4, "Example 4")
+    _print_preparation_index_sets(preparation_indices_example_4)
+    _print_measurement_index_sets(measurement_indices_example_4)
+    _print_measurement_operational_equivalences(scenario_example_4)
+    _print_guessing_probability_grids(scenario_example_4, measurement_indices_example_4)
+    _print_manual_target_robustness(scenario_example_4, "Example 4")
 
     # Example 5: Peres 24-ray construction restricted to 6 disjoint bases.
     # Grouping is by contiguous 4-ray blocks from the screenshot:
@@ -292,33 +390,32 @@ def main() -> None:
     )
     peres_kets = _normalize_integer_rays_symbolic(peres_rays)
 
-    context_indices_5 = [tuple(range(4 * y, 4 * (y + 1))) for y in range(6)]
-    gpt_effect_set_example_5 = np.array([projector_hs_vector(ket) for ket in peres_kets], dtype=object)
-    gpt_effects_grouped_example_5 = np.array(
-        [[gpt_effect_set_example_5[idx] for idx in context] for context in context_indices_5],
-        dtype=object,
-    )  # (6, 4, K)
-    gpt_states_example_5 = np.array(gpt_effects_grouped_example_5, copy=True)
+    preparation_indices_example_5 = [tuple(range(4 * x, 4 * (x + 1))) for x in range(6)]
+    measurement_indices_example_5 = list(preparation_indices_example_5)
 
-    opeq_preps_5 = discover_operational_equivalences_from_gpt_objects(gpt_states_example_5)
-    opeq_meas_5 = discover_operational_equivalences_from_gpt_objects(gpt_effects_grouped_example_5)
-    data_5 = probability_table_from_gpt_vectors(gpt_states_example_5, gpt_effects_grouped_example_5)
+    gpt_state_set_example_5 = np.array([projector_hs_vector(ket) for ket in peres_kets], dtype=object)
+    gpt_effect_set_example_5 = np.array([projector_hs_vector(ket) for ket in peres_kets], dtype=object)
+    gpt_states_grouped_example_5 = _group_gpt_vectors(
+        gpt_state_set_example_5,
+        preparation_indices_example_5,
+    )
+    gpt_effects_grouped_example_5 = _group_gpt_vectors(
+        gpt_effect_set_example_5,
+        measurement_indices_example_5,
+    )
 
     _print_title("Example 5: Peres 24 rays in 6 disjoint 4-ray bases")
-    scenario_5 = ContextualityScenario(
-        data=np.real_if_close(data_5).astype(float),
-        opeq_preps=np.real_if_close(opeq_preps_5).astype(float),
-        opeq_meas=np.real_if_close(opeq_meas_5).astype(float),
+    scenario_example_5 = _build_manual_scenario_from_grouped_gpt(
+        gpt_states_grouped_example_5,
+        gpt_effects_grouped_example_5,
         verbose=False,
     )
-    print(scenario_5)
-    _print_measurement_index_sets(context_indices_5)
-    _print_manual_target_randomness(
-        scenario_5,
-        context_indices_5,
-        target_pair=(0, 0),
-    )
-    _print_manual_target_robustness(scenario_5, "Example 5")
+    print(scenario_example_5)
+    _print_preparation_index_sets(preparation_indices_example_5)
+    _print_measurement_index_sets(measurement_indices_example_5)
+    _print_measurement_operational_equivalences(scenario_example_5)
+    _print_guessing_probability_grids(scenario_example_5, measurement_indices_example_5)
+    _print_manual_target_robustness(scenario_example_5, "Example 5")
 
 
 if __name__ == "__main__":

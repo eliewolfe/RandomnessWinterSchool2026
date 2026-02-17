@@ -1,11 +1,10 @@
 """Public package API for contextuality randomness tooling."""
 
 from .randomness import (
+    analyze_scenario,
     eve_optimal_average_guessing_probability,
     eve_optimal_guessing_probability,
     min_entropy_bits,
-    run_gpt_example,
-    run_quantum_example,
 )
 from .contextuality import (
     SimplexEmbeddabilityResult,
@@ -60,8 +59,7 @@ __all__ = [
     "preparation_assignment_extremals",
     "effect_assignment_extremals",
     "SimplexEmbeddabilityResult",
+    "analyze_scenario",
     "eve_optimal_average_guessing_probability",
     "eve_optimal_guessing_probability",
-    "run_gpt_example",
-    "run_quantum_example",
 ]

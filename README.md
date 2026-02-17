@@ -176,15 +176,17 @@ Projective fast path:
 
 ### `randomness.py`
 
-Contains MOSEK LPs for Eve's guessing probability and convenience runners.
+Contains MOSEK LPs for Eve's guessing probability and entropy helpers.
 
 Main functions:
 
 - `eve_optimal_guessing_probability(scenario, x, y)`
 - `eve_optimal_average_guessing_probability(scenario)`
 - `min_entropy_bits(p_guess)`
-- `run_gpt_example(...)`
-- `run_quantum_example(...)`
+- `alice_optimal_guessing_min_entropy_bits(scenario, x, y)`
+- `alice_optimal_average_guessing_min_entropy_bits(scenario)`
+- `alice_conditional_entropy_bits(scenario, x, y)`
+- `alice_average_conditional_entropy_bits(scenario)`
 
 ### `contextuality.py`
 
@@ -339,32 +341,32 @@ It currently demonstrates:
 
 Helper functions used in demo:
 
-- `_print_manual_target_randomness(...)`:
-  - prints Eve and Alice target guessing probabilities.
+- `_print_guessing_probability_grids(...)`:
+  - prints Eve and Alice guessing-probability grids over all `(x,y)` pairs.
 - `_print_manual_target_robustness(...)`:
   - prints `r*` robustness and interpretation.
 - `_print_measurement_index_sets(...)`:
   - prints manually supplied measurement context indices.
 
-The demo uses both:
-
-- high-level convenience (`run_quantum_example`), and
-- explicit low-level construction (`ContextualityScenario(...)` from manually computed GPT objects).
+The demo uses explicit low-level construction (`ContextualityScenario(...)`) from manually computed GPT objects.
 
 ## Minimal Usage Patterns
 
 ### 1) Quantum input to randomness
 
 ```python
-from randomness_contextuality_lp.randomness import run_quantum_example
+from randomness_contextuality_lp.quantum import contextuality_scenario_from_quantum
+from randomness_contextuality_lp.randomness import eve_optimal_guessing_probability
 
-scenario, measurement_indices, p_guess = run_quantum_example(
-    quantum_states=quantum_states,      # (X,d,d) or (X,A,d,d)
-    quantum_effect_set=effect_set,      # (N_effects,d,d), flat set
-    target_pair=(0, 0),
+scenario, measurement_indices = contextuality_scenario_from_quantum(
+    quantum_states=quantum_states,         # (X,d,d) or (X,A,d,d)
+    quantum_effect_set=effect_set,         # (N_effects,d,d), flat set
     outcomes_per_measurement=2,
     verbose=True,
+    return_measurement_indices=True,
 )
+
+p_guess = eve_optimal_guessing_probability(scenario, x=0, y=0)
 ```
 
 ### 2) GPT input to scenario
@@ -407,7 +409,7 @@ r_star = contextuality_robustness_to_dephasing(scenario)
 - `randomness_contextuality_lp/`
   - `scenario.py`: scenario container, OPEQ discovery/validation, Alice benchmark
   - `quantum.py`: quantum/GPT conversions and scenario constructors
-  - `randomness.py`: Eve LPs and convenience runners
+  - `randomness.py`: Eve LPs and entropy helpers
   - `contextuality.py`: simplex embeddability and robustness LP
   - `linalg_utils.py`: nullspace/independence/extremal-ray helper wrappers
   - `extremal_finders.py`: CDD/MOSEK cone conversion backends
@@ -419,6 +421,6 @@ r_star = contextuality_robustness_to_dephasing(scenario)
 
 - Measurement inference from a flat effect set is combinatorial in the number of effects; constrain with `outcomes_per_measurement` when possible.
 - If you already know measurement contexts, you can bypass automatic detection and directly build grouped objects (as in `demo.py` Examples 3 and 4).
-- If you want the projector-detection fast path, call `contextuality_scenario_from_quantum(...)` directly (the convenience `run_quantum_example(...)` currently uses the generic conversion path).
+- `contextuality_scenario_from_quantum(...)` automatically uses a projector fast path when applicable.
 - For advanced cone work, import directly from `randomness_contextuality_lp.extremal_finders`.
 - For strict consistency checks, call `scenario.sanity_check()`.

@@ -45,7 +45,7 @@ def preparation_assignment_extremals(
     """
     tol = scenario.atol if atol is None else float(atol)
     rays_flat = _assignment_extremal_rays(
-        opeq_array=scenario.opeq_preps,
+        opeq_array=scenario.opeq_preps_numeric,
         num_settings=scenario.X_cardinality,
         num_outcomes=scenario.A_cardinality,
         atol=tol,
@@ -66,7 +66,7 @@ def effect_assignment_extremals(
     """
     tol = scenario.atol if atol is None else float(atol)
     rays_flat = _assignment_extremal_rays(
-        opeq_array=scenario.opeq_meas,
+        opeq_array=scenario.opeq_meas_numeric,
         num_settings=scenario.Y_cardinality,
         num_outcomes=scenario.B_cardinality,
         atol=tol,
@@ -85,20 +85,21 @@ def assess_simplex_embeddability(
     ``(1-r)P + r D`` admits a nonnegative assignment-ray decomposition.
     """
     tol = scenario.atol if atol is None else float(atol)
+    data_numeric = scenario.data_numeric
     prep_extremals = preparation_assignment_extremals(scenario, atol=tol)
     effect_extremals = effect_assignment_extremals(scenario, atol=tol)
     target = (
-        _default_dephasing_target(scenario.data, atol=tol)
+        _default_dephasing_target(data_numeric, atol=tol)
         if dephasing_target is None
         else _validate_dephasing_target(
             np.asarray(dephasing_target, dtype=float),
-            shape=scenario.data.shape,
+            shape=data_numeric.shape,
             atol=tol,
         )
     )
 
     robustness, weights, status = _solve_dephasing_robustness_lp(
-        data=scenario.data,
+        data=data_numeric,
         dephasing_target=target,
         prep_extremals=prep_extremals,
         effect_extremals=effect_extremals,

@@ -426,9 +426,9 @@ def contextuality_scenario_from_gpt(
     opeq_meas = discover_operational_equivalences_from_gpt_objects(measurement_effects, atol=atol)
 
     scenario = ContextualityScenario(
-        data=np.real_if_close(data_table).astype(float),
-        opeq_preps=np.real_if_close(opeq_preps).astype(float),
-        opeq_meas=np.real_if_close(opeq_meas).astype(float),
+        data=data_table,
+        opeq_preps=opeq_preps,
+        opeq_meas=opeq_meas,
         atol=atol,
         verbose=verbose,
     )
@@ -465,8 +465,7 @@ def contextuality_scenario_from_quantum(
     This is the quantum entry point for downstream randomness analysis. After
     construction, pass the returned scenario to
     ``eve_optimal_guessing_probability`` or
-    ``eve_optimal_average_guessing_probability``. It can also be used through
-    ``run_quantum_example`` as a convenience wrapper.
+    ``eve_optimal_average_guessing_probability``.
 
     Input/output structure
     ----------------------
