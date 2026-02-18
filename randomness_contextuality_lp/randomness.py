@@ -33,7 +33,6 @@ def eve_optimal_guessing_probability(
     x: int = 0,
     y: int = 0,
     bin_outcomes: list[list[int]] | tuple[tuple[int, ...], ...] | None = None,
-    tampering: bool = False,
 ) -> float:
     """Compute Eve's best guessing probability for one chosen target ``(x, y)``.
 
@@ -57,10 +56,6 @@ def eve_optimal_guessing_probability(
     example ``[[0, 1], [2, 3]]``) to guess bins rather than exact outcomes.
     Output is a single float in ``[0, 1]``: the LP optimum for
     Eve's guessing probability at that target pair.
-    Set ``tampering=True`` to replace tripartite OPEQ constraints with
-    OPEQ constraints formed from bipartite sums:
-    ``sum_b P(a,b,e|x,y)`` for preparations and
-    ``sum_a P(a,b,e|x,y)`` for measurements.
 
     High-level implementation
     -------------------------
@@ -77,7 +72,6 @@ def eve_optimal_guessing_probability(
         scenario=scenario,
         objective_terms=[(x, y, 1.0)],
         bin_outcomes=bin_outcomes,
-        tampering=tampering,
     )
     return float(p_guess)
 
@@ -85,7 +79,6 @@ def eve_optimal_guessing_probability(
 def eve_optimal_average_guessing_probability(
     scenario: ContextualityScenario,
     bin_outcomes: list[list[int]] | tuple[tuple[int, ...], ...] | None = None,
-    tampering: bool = False,
 ) -> float:
     """Compute Eve's optimal guessing probability averaged over all ``(x, y)``.
 
@@ -106,10 +99,6 @@ def eve_optimal_average_guessing_probability(
     of Bob outcomes (for example ``[[0, 1], [2, 3]]``) to optimize bin guessing
     rather than exact outcome guessing. Output is one float in ``[0, 1]``
     representing the LP optimum of the mean guessing objective over all settings.
-    Set ``tampering=True`` to replace tripartite OPEQ constraints with
-    OPEQ constraints formed from bipartite sums:
-    ``sum_b P(a,b,e|x,y)`` for preparations and
-    ``sum_a P(a,b,e|x,y)`` for measurements.
 
     High-level implementation
     -------------------------
@@ -126,7 +115,6 @@ def eve_optimal_average_guessing_probability(
         scenario=scenario,
         objective_terms=objective_terms,
         bin_outcomes=bin_outcomes,
-        tampering=tampering,
     )
     return float(p_guess)
 
@@ -134,13 +122,8 @@ def eve_optimal_average_guessing_probability(
 def analyze_scenario(
     scenario: ContextualityScenario,
     bin_outcomes: list[list[int]] | tuple[tuple[int, ...], ...] | None = None,
-    tampering: bool = False,
 ) -> tuple[np.ndarray, np.ndarray]:
     """Compute and cache Eve guessing and key-rate tables on ``scenario``.
-
-    Set ``tampering=True`` to use tampering LP constraints:
-    preparation OPEQs are enforced on ``sum_b P(a,b,e|x,y)`` and measurement
-    OPEQs on ``sum_a P(a,b,e|x,y)``, instead of directly on ``P(ABE|XY)``.
 
     Returns
     -------
@@ -153,7 +136,6 @@ def analyze_scenario(
     p_guess_eve_table = _solve_guessing_lp_hotstart_table(
         scenario=scenario,
         bin_outcomes=bin_outcomes,
-        tampering=tampering,
     )
 
     keyrate_table = np.zeros_like(p_guess_eve_table)
@@ -168,7 +150,6 @@ def analyze_scenario(
 def _build_single_model_lp_components(
     scenario: ContextualityScenario,
     bin_outcomes: list[list[int]] | tuple[tuple[int, ...], ...] | None = None,
-    tampering: bool = False,
 ):
     """Build shared single-model LP components used by sweep/single/average objectives."""
     data = scenario.data_numeric
@@ -220,115 +201,61 @@ def _build_single_model_lp_components(
         rows_vals.append(e_ones.tolist())
         rhs.append(float(data[x, y, a, b]))
 
-    b_values = np.arange(num_b, dtype=int)
-    a_values = np.arange(num_a, dtype=int)
+    # Preparation OPEQs: sum_{x,a} c[x,a] P(a,b,e|x,y) = 0
+    prep_row_shape = (num_y, num_b, num_e)
+    prep_rows_per_opeq = int(np.prod(prep_row_shape))
+    prep_y, prep_b, prep_e = np.unravel_index(
+        np.arange(prep_rows_per_opeq, dtype=int),
+        prep_row_shape,
+    )
+    for coeffs in opeq_preps:
+        x_nonzero, a_nonzero = np.nonzero(coeffs)
+        coeff_nonzero = coeffs[x_nonzero, a_nonzero].astype(float)
+        if coeff_nonzero.size == 0:
+            continue
 
-    if not tampering:
-        # Preparation OPEQs: sum_{x,a} c[x,a] P(a,b,e|x,y) = 0
-        prep_row_shape = (num_y, num_b, num_e)
-        prep_rows_per_opeq = int(np.prod(prep_row_shape))
-        prep_y, prep_b, prep_e = np.unravel_index(
-            np.arange(prep_rows_per_opeq, dtype=int),
-            prep_row_shape,
+        cols_matrix = var_index(
+            x_nonzero[coeff_axis],
+            prep_y[row_axis],
+            a_nonzero[coeff_axis],
+            prep_b[row_axis],
+            prep_e[row_axis],
         )
-        for coeffs in opeq_preps:
-            x_nonzero, a_nonzero = np.nonzero(coeffs)
-            coeff_nonzero = coeffs[x_nonzero, a_nonzero].astype(float)
-            if coeff_nonzero.size == 0:
-                continue
-
-            cols_matrix = var_index(
-                x_nonzero[coeff_axis],
-                prep_y[row_axis],
-                a_nonzero[coeff_axis],
-                prep_b[row_axis],
-                prep_e[row_axis],
-            )
-            vals_matrix = np.broadcast_to(
-                coeff_nonzero[coeff_axis],
-                cols_matrix.shape,
-            )
-            rows_cols.extend(cols_matrix.tolist())
-            rows_vals.extend(vals_matrix.tolist())
-            rhs.extend([0.0] * prep_rows_per_opeq)
-
-        # Measurement OPEQs: sum_{y,b} d[y,b] P(a,b,e|x,y) = 0
-        meas_row_shape = (num_x, num_a, num_e)
-        meas_rows_per_opeq = int(np.prod(meas_row_shape))
-        meas_x, meas_a, meas_e = np.unravel_index(
-            np.arange(meas_rows_per_opeq, dtype=int),
-            meas_row_shape,
+        vals_matrix = np.broadcast_to(
+            coeff_nonzero[coeff_axis],
+            cols_matrix.shape,
         )
-        for coeffs in opeq_meas:
-            y_nonzero, b_nonzero = np.nonzero(coeffs)
-            coeff_nonzero = coeffs[y_nonzero, b_nonzero].astype(float)
-            if coeff_nonzero.size == 0:
-                continue
+        rows_cols.extend(cols_matrix.tolist())
+        rows_vals.extend(vals_matrix.tolist())
+        rhs.extend([0.0] * prep_rows_per_opeq)
 
-            cols_matrix = var_index(
-                meas_x[row_axis],
-                y_nonzero[coeff_axis],
-                meas_a[row_axis],
-                b_nonzero[coeff_axis],
-                meas_e[row_axis],
-            )
-            vals_matrix = np.broadcast_to(
-                coeff_nonzero[coeff_axis],
-                cols_matrix.shape,
-            )
-            rows_cols.extend(cols_matrix.tolist())
-            rows_vals.extend(vals_matrix.tolist())
-            rhs.extend([0.0] * meas_rows_per_opeq)
-    else:
-        # Preparation OPEQs on summed AE slices:
-        # sum_{x,a} c[x,a] * sum_b P(a,b,e|x,y) = 0 for each (y,e).
-        prep_row_shape = (num_y, num_e)
-        prep_rows = int(np.prod(prep_row_shape))
-        prep_y, prep_e = np.unravel_index(np.arange(prep_rows, dtype=int), prep_row_shape)
-        for coeffs in opeq_preps:
-            x_nonzero, a_nonzero = np.nonzero(coeffs)
-            coeff_nonzero = coeffs[x_nonzero, a_nonzero].astype(float)
-            if coeff_nonzero.size == 0:
-                continue
-            cols_matrix = var_index(
-                x_nonzero[None, :, None],
-                prep_y[:, None, None],
-                a_nonzero[None, :, None],
-                b_values[None, None, :],
-                prep_e[:, None, None],
-            )
-            vals_matrix = np.broadcast_to(
-                coeff_nonzero[None, :, None],
-                cols_matrix.shape,
-            )
-            rows_cols.extend(cols_matrix.reshape(prep_rows, -1).tolist())
-            rows_vals.extend(vals_matrix.reshape(prep_rows, -1).tolist())
-            rhs.extend([0.0] * prep_rows)
+    # Measurement OPEQs: sum_{y,b} d[y,b] P(a,b,e|x,y) = 0
+    meas_row_shape = (num_x, num_a, num_e)
+    meas_rows_per_opeq = int(np.prod(meas_row_shape))
+    meas_x, meas_a, meas_e = np.unravel_index(
+        np.arange(meas_rows_per_opeq, dtype=int),
+        meas_row_shape,
+    )
+    for coeffs in opeq_meas:
+        y_nonzero, b_nonzero = np.nonzero(coeffs)
+        coeff_nonzero = coeffs[y_nonzero, b_nonzero].astype(float)
+        if coeff_nonzero.size == 0:
+            continue
 
-        # Measurement OPEQs on summed BE slices:
-        # sum_{y,b} d[y,b] * sum_a P(a,b,e|x,y) = 0 for each (x,e).
-        meas_row_shape = (num_x, num_e)
-        meas_rows = int(np.prod(meas_row_shape))
-        meas_x, meas_e = np.unravel_index(np.arange(meas_rows, dtype=int), meas_row_shape)
-        for coeffs in opeq_meas:
-            y_nonzero, b_nonzero = np.nonzero(coeffs)
-            coeff_nonzero = coeffs[y_nonzero, b_nonzero].astype(float)
-            if coeff_nonzero.size == 0:
-                continue
-            cols_matrix = var_index(
-                meas_x[:, None, None],
-                y_nonzero[None, :, None],
-                a_values[None, None, :],
-                b_nonzero[None, :, None],
-                meas_e[:, None, None],
-            )
-            vals_matrix = np.broadcast_to(
-                coeff_nonzero[None, :, None],
-                cols_matrix.shape,
-            )
-            rows_cols.extend(cols_matrix.reshape(meas_rows, -1).tolist())
-            rows_vals.extend(vals_matrix.reshape(meas_rows, -1).tolist())
-            rhs.extend([0.0] * meas_rows)
+        cols_matrix = var_index(
+            meas_x[row_axis],
+            y_nonzero[coeff_axis],
+            meas_a[row_axis],
+            b_nonzero[coeff_axis],
+            meas_e[row_axis],
+        )
+        vals_matrix = np.broadcast_to(
+            coeff_nonzero[coeff_axis],
+            cols_matrix.shape,
+        )
+        rows_cols.extend(cols_matrix.tolist())
+        rows_vals.extend(vals_matrix.tolist())
+        rhs.extend([0.0] * meas_rows_per_opeq)
 
     return (
         num_x,
@@ -349,7 +276,6 @@ def _solve_guessing_lp_hotstart_table(
     scenario: ContextualityScenario,
     target_pairs: list[tuple[int, int]] | None = None,
     bin_outcomes: list[list[int]] | tuple[tuple[int, ...], ...] | None = None,
-    tampering: bool = False,
 ) -> np.ndarray:
     """Solve selected single-target Eve objectives by re-optimizing one primal simplex task."""
     (
@@ -367,7 +293,6 @@ def _solve_guessing_lp_hotstart_table(
     ) = _build_single_model_lp_components(
         scenario=scenario,
         bin_outcomes=bin_outcomes,
-        tampering=tampering,
     )
 
     if target_pairs is None:
@@ -416,7 +341,7 @@ def _solve_guessing_lp_hotstart_table(
                 p_guess_table[target_x, target_y] = _get_optimal_primal_objective(
                     task,
                     failure_context=(
-                        f"single-target LP for (x={target_x}, y={target_y}), tampering={tampering}"
+                        f"single-target LP for (x={target_x}, y={target_y})"
                     ),
                     termination_code=termination_code,
                 )
@@ -428,7 +353,6 @@ def _solve_guessing_lp_aggregate_objective(
     scenario: ContextualityScenario,
     objective_terms: list[tuple[int, int, float]],
     bin_outcomes: list[list[int]] | tuple[tuple[int, ...], ...] | None = None,
-    tampering: bool = False,
 ) -> float:
     """Solve one LP with a weighted aggregate objective over target settings."""
     (
@@ -446,7 +370,6 @@ def _solve_guessing_lp_aggregate_objective(
     ) = _build_single_model_lp_components(
         scenario=scenario,
         bin_outcomes=bin_outcomes,
-        tampering=tampering,
     )
 
     if len(objective_terms) == 0:
@@ -489,7 +412,7 @@ def _solve_guessing_lp_aggregate_objective(
             return _get_optimal_primal_objective(
                 task,
                 failure_context=(
-                    f"aggregate-objective LP (num_terms={len(objective_terms)}), tampering={tampering}"
+                    f"aggregate-objective LP (num_terms={len(objective_terms)})"
                 ),
                 termination_code=termination_code,
             )

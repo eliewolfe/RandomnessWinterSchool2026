@@ -61,12 +61,10 @@ def _print_guessing_probability_grids(
     precision: int = 3,
     include_keyrate_pairs: bool = True,
     keyrate_threshold: float = 0.1,
-    tampering: bool = False,
 ) -> None:
     p_guess_eve, keyrate_table = analyze_scenario(
         scenario=scenario,
         bin_outcomes=bin_outcomes,
-        tampering=tampering,
     )
     num_x = scenario.X_cardinality
     num_y = scenario.Y_cardinality

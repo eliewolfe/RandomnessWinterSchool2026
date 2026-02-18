@@ -191,7 +191,6 @@ Main functions:
 
 Notes:
 
-- `tampering=False` is the default across Eve LP entry points.
 - Alice-side guessing and conditional-entropy helpers now live on `ContextualityScenario` in `scenario.py`.
 
 ### `contextuality.py`
