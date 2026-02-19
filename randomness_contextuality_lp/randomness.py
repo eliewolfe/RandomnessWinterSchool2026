@@ -11,13 +11,22 @@ from .scenario import ContextualityScenario
 
 def reverse_fano_bound(p_guess: float) -> float:
     """Return a lower bound on conditional Shannon entropy in bits from guessing probability."""
-    f = np.floor(1 / p_guess)
+    p = float(p_guess)
+    if p <= 0.0:
+        raise ValueError("p_guess must be strictly positive.")
+    if p < 1.0:
+        p_eff = p
+    else:
+        p_eff = 1.0
+
+    f = math.floor(1 / p_eff)
     c = f + 1
-    return (c * p_guess - 1) * f * np.log2(f) + (1 - f * p_guess) * c * np.log2(c)
+    return (c * p_eff - 1) * f * math.log2(f) + (1 - f * p_eff) * c * math.log2(c)
 
 def min_entropy_bits(p_guess: float) -> float:
     """Return min-entropy in bits from guessing probability."""
     return float(-math.log2(p_guess))
+
 
 def eve_optimal_guessing_probability(
     scenario: ContextualityScenario,
@@ -59,11 +68,12 @@ def eve_optimal_guessing_probability(
     if y < 0 or y >= scenario.Y_cardinality:
         raise ValueError(f"y must be in 0..{scenario.Y_cardinality - 1}.")
 
-    return _solve_guessing_lp(
+    p_guess = _solve_guessing_lp_aggregate_objective(
         scenario=scenario,
-        target_pairs=[(x, y)],
+        objective_terms=[(x, y, 1.0)],
         bin_outcomes=bin_outcomes,
     )
+    return float(p_guess)
 
 
 def eve_optimal_average_guessing_probability(
@@ -96,183 +106,55 @@ def eve_optimal_average_guessing_probability(
     averages per-target success terms, reusing the same feasibility constraints as
     the single-target optimization.
     """
-    target_pairs = list(np.ndindex(scenario.X_cardinality, scenario.Y_cardinality))
-    return _solve_guessing_lp(
+    num_targets = float(scenario.X_cardinality * scenario.Y_cardinality)
+    objective_terms = [
+        (x, y, 1.0 / num_targets)
+        for x, y in np.ndindex(scenario.X_cardinality, scenario.Y_cardinality)
+    ]
+    p_guess = _solve_guessing_lp_aggregate_objective(
         scenario=scenario,
-        target_pairs=target_pairs,
+        objective_terms=objective_terms,
+        bin_outcomes=bin_outcomes,
+    )
+    return float(p_guess)
+
+
+def analyze_scenario(
+    scenario: ContextualityScenario,
+    bin_outcomes: list[list[int]] | tuple[tuple[int, ...], ...] | None = None,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Compute and cache Eve guessing and key-rate tables on ``scenario``.
+
+    Returns
+    -------
+    tuple
+        ``(p_guess_eve_table, keyrate_table)``, both with shape ``(X, Y)``.
+    """
+    num_x = scenario.X_cardinality
+    num_y = scenario.Y_cardinality
+
+    p_guess_eve_table = _solve_guessing_lp_hotstart_table(
+        scenario=scenario,
         bin_outcomes=bin_outcomes,
     )
 
+    keyrate_table = np.zeros_like(p_guess_eve_table)
+    for x, y in np.ndindex(num_x, num_y):
+        keyrate_table[x, y] = reverse_fano_bound(p_guess_eve_table[x, y]) - scenario.alice_conditional_entropy_table[x, y]
 
-def run_gpt_example(
-    gpt_states: np.ndarray,
-    gpt_effect_set: np.ndarray,
-    title: str | None = None,
-    target_pair: tuple[int, int] | None = None,
-    source_outcome_distribution: np.ndarray | None = None,
-    unit_effect: np.ndarray | None = None,
-    atol: float = 1e-9,
-    outcomes_per_measurement: int = 2,
-    drop_tiny_imag: bool = True,
-    verbose: bool = True,
-) -> tuple[ContextualityScenario, list[tuple[int, ...]], float]:
-    """Convenience pipeline from GPT vectors to scenario and randomness output.
-
-    Motivation
-    ----------
-    This is the GPT-side quick-start helper for exploratory workflows. It builds the
-    contextuality scenario, reports inferred measurement groupings from a flat effect
-    set, and optionally evaluates a targeted Eve-guessing objective.
-
-    How to use it with other functions
-    ----------------------------------
-    Internally this wraps ``contextuality_scenario_from_gpt`` and, when a target
-    measurement is provided, calls ``eve_optimal_guessing_probability``. Use it for
-    single-call experiments; use lower-level constructors/optimizers directly when
-    you want finer control.
-
-    Parameters
-    ----------
-    gpt_states:
-        GPT preparation vectors with shape ``(X,K)`` or ``(X,A,K)``.
-    gpt_effect_set:
-        Flat GPT effect set with shape ``(N_effects,K)``.
-    title:
-        Optional heading printed before the report.
-    target_pair:
-        Optional target setting tuple ``(x,y)``. If provided, the function reports
-        Eve's optimal guessing probability for that ``x`` and ``y``.
-    source_outcome_distribution:
-        Optional ``P(a|x)`` used to form joint ``P(a,b|x,y)`` when states are
-        provided without explicit source outcomes.
-    unit_effect:
-        Optional GPT unit-effect vector; inferred from dimension when omitted.
-    atol:
-        Numerical tolerance used in inference/validation.
-    outcomes_per_measurement:
-        Number of outcomes per inferred measurement subset.
-    drop_tiny_imag:
-        If True, drop tiny imaginary components introduced by numerical noise.
-    verbose:
-        If True, scenario constructor prints probabilities and OPEQs.
-
-    Returns
-    -------
-    tuple
-        ``(scenario, measurement_indices, p_guess)``.
-
-    High-level implementation
-    -------------------------
-    The function first builds a ``ContextualityScenario`` from GPT data, then solves
-    the single-target Eve LP at ``(x,y)`` from ``target_pair`` or defaults to
-    ``(0,0)``.
-    """
-    from .quantum import contextuality_scenario_from_gpt
-
-    if title is not None:
-        print("\n" + "=" * 80)
-        print(title)
-        print("=" * 80)
-
-    scenario, measurement_indices = contextuality_scenario_from_gpt(
-        gpt_states=gpt_states,
-        gpt_effect_set=gpt_effect_set,
-        source_outcome_distribution=source_outcome_distribution,
-        unit_effect=unit_effect,
-        atol=atol,
-        outcomes_per_measurement=outcomes_per_measurement,
-        drop_tiny_imag=drop_tiny_imag,
-        verbose=verbose,
-        return_measurement_indices=True,
-    )
-
-    if target_pair is None:
-        x_target, y_target = 0, 0
-    else:
-        x_target, y_target = target_pair
-
-    p_guess = eve_optimal_guessing_probability(scenario, x=x_target, y=y_target)
-    print("\nEve optimal guessing probability for target setting:")
-    print(f"x_target={x_target}, y_target={y_target}")
-    print(f"measurement indices={measurement_indices[y_target]}")
-    print(f"P_guess = {p_guess:.10f}")
-    if verbose:
-        p_guess_alice = scenario.alice_optimal_guessing_probability(x=x_target, y=y_target)
-        print("\nAlice optimal guessing probability for target setting:")
-        print(f"x_target={x_target}, y_target={y_target}")
-        print(f"P_guess = {p_guess_alice:.10f}")
-    return scenario, measurement_indices, p_guess
+    scenario.p_guess_eve_table = p_guess_eve_table
+    scenario.keyrate_table = keyrate_table
+    return p_guess_eve_table, keyrate_table
 
 
-def run_quantum_example(
-    quantum_states: np.ndarray,
-    quantum_effect_set: np.ndarray,
-    title: str | None = None,
-    target_pair: tuple[int, int] | None = None,
-    outcomes_per_measurement: int = 2,
-    verbose: bool = True,
-) -> tuple[ContextualityScenario, list[tuple[int, ...]], float]:
-    """Convenience pipeline from quantum objects to scenario and randomness output.
-
-    Motivation
-    ----------
-    This is a quick-start helper for experiments and demos: one call builds the
-    contextuality scenario, exposes inferred measurement groupings, and optionally
-    computes a targeted guessing probability.
-
-    How to use it with other functions
-    ----------------------------------
-    Internally this converts quantum matrices into GPT vectors and delegates to
-    ``run_gpt_example``. It is best for interactive exploration; for production
-    flows you may call lower-level constructors/optimizers directly.
-
-    Parameters
-    ----------
-    quantum_states:
-        Quantum states with shape ``(X,d,d)`` or ``(X,A,d,d)``.
-    quantum_effect_set:
-        Flat set of effects with shape ``(N_effects,d,d)``.
-    title:
-        Optional heading printed before the report.
-    target_pair:
-        Optional target setting tuple ``(x,y)``. If provided, the function reports
-        Eve's optimal guessing probability for that ``x`` and ``y``.
-    outcomes_per_measurement:
-        Number of outcomes per inferred measurement subset.
-    verbose:
-        If True, scenario constructor prints probabilities and OPEQs.
-
-    Returns
-    -------
-    tuple
-        ``(scenario, measurement_indices, p_guess)``.
-
-    High-level implementation
-    -------------------------
-    The function converts matrices to GPT vectors in a Hilbert-Schmidt basis and
-    then executes the same scenario-build and optional target-evaluation pipeline as
-    ``run_gpt_example``. If ``target_pair`` is omitted, it defaults to ``(0,0)``.
-    """
-    from .quantum import convert_matrix_list_to_vector_list
-
-    gpt_states = convert_matrix_list_to_vector_list(quantum_states)
-    gpt_effect_set = convert_matrix_list_to_vector_list(quantum_effect_set)
-    return run_gpt_example(
-        gpt_states=gpt_states,
-        gpt_effect_set=gpt_effect_set,
-        title=title,
-        target_pair=target_pair,
-        outcomes_per_measurement=outcomes_per_measurement,
-        verbose=verbose,
-    )
-
-
-def _solve_guessing_lp(
+def _build_single_model_lp_components(
     scenario: ContextualityScenario,
-    target_pairs: list[tuple[int, int]],
     bin_outcomes: list[list[int]] | tuple[tuple[int, ...], ...] | None = None,
-) -> float:
-    """Build and solve the LP for a list of target pairs."""
+):
+    """Build shared single-model LP components used by sweep/single/average objectives."""
+    data = scenario.data_numeric
+    opeq_preps = scenario.opeq_preps_numeric
+    opeq_meas = scenario.opeq_meas_numeric
     num_x = scenario.X_cardinality
     num_y = scenario.Y_cardinality
     num_a = scenario.A_cardinality
@@ -285,23 +167,20 @@ def _solve_guessing_lp(
     outcome_to_bin = np.empty(num_b, dtype=int)
     for bin_id, outcome_indices in enumerate(bins):
         outcome_to_bin[outcome_indices] = bin_id
-    num_targets = len(target_pairs)
 
-    num_variables = num_targets * num_x * num_y * num_a * num_b * num_e
+    num_variables = num_x * num_y * num_a * num_b * num_e
 
     def var_index(
-        t: int | np.ndarray,
         x: int | np.ndarray,
         y: int | np.ndarray,
         a: int | np.ndarray,
         b: int | np.ndarray,
         e: int | np.ndarray,
     ) -> int | np.ndarray:
-        """Map multi-indices (with broadcasting) to flat MOSEK variable indices."""
-        t_arr, x_arr, y_arr, a_arr, b_arr, e_arr = np.broadcast_arrays(t, x, y, a, b, e)
+        x_arr, y_arr, a_arr, b_arr, e_arr = np.broadcast_arrays(x, y, a, b, e)
         idx = np.ravel_multi_index(
-            (t_arr, x_arr, y_arr, a_arr, b_arr, e_arr),
-            dims=(num_targets, num_x, num_y, num_a, num_b, num_e),
+            (x_arr, y_arr, a_arr, b_arr, e_arr),
+            dims=(num_x, num_y, num_a, num_b, num_e),
         )
         if np.ndim(idx) == 0:
             return int(idx)
@@ -313,33 +192,29 @@ def _solve_guessing_lp(
     row_axis = slice(None), None
     coeff_axis = None, slice(None)
 
-    # Data consistency:
-    # sum_e P_t(a,b,e|x,y) = P_data(a,b|x,y)
+    # Data consistency: sum_e P(a,b,e|x,y) = P_data(a,b|x,y)
     e_values = np.arange(num_e, dtype=int)
     e_ones = np.ones(num_e, dtype=float)
-    for t, x, y, a, b in np.ndindex(num_targets, num_x, num_y, num_a, num_b):
-        cols = var_index(t, x, y, a, b, e_values)
+    for x, y, a, b in np.ndindex(num_x, num_y, num_a, num_b):
+        cols = var_index(x, y, a, b, e_values)
         rows_cols.append(cols.tolist())
         rows_vals.append(e_ones.tolist())
-        rhs.append(float(scenario.data[x, y, a, b]))
+        rhs.append(float(data[x, y, a, b]))
 
-    # Preparation operational equivalences:
-    # sum_{x,a} c[x,a] P_t(a,b,e|x,y) = 0
-    prep_row_shape = (num_targets, num_y, num_b, num_e)
+    # Preparation OPEQs: sum_{x,a} c[x,a] P(a,b,e|x,y) = 0
+    prep_row_shape = (num_y, num_b, num_e)
     prep_rows_per_opeq = int(np.prod(prep_row_shape))
-    prep_t, prep_y, prep_b, prep_e = np.unravel_index(
+    prep_y, prep_b, prep_e = np.unravel_index(
         np.arange(prep_rows_per_opeq, dtype=int),
         prep_row_shape,
     )
-    for coeffs in scenario.opeq_preps:
+    for coeffs in opeq_preps:
         x_nonzero, a_nonzero = np.nonzero(coeffs)
         coeff_nonzero = coeffs[x_nonzero, a_nonzero].astype(float)
-
         if coeff_nonzero.size == 0:
             continue
 
         cols_matrix = var_index(
-            prep_t[row_axis],
             x_nonzero[coeff_axis],
             prep_y[row_axis],
             a_nonzero[coeff_axis],
@@ -354,23 +229,20 @@ def _solve_guessing_lp(
         rows_vals.extend(vals_matrix.tolist())
         rhs.extend([0.0] * prep_rows_per_opeq)
 
-    # Measurement operational equivalences:
-    # sum_{y,b} d[y,b] P_t(a,b,e|x,y) = 0
-    meas_row_shape = (num_targets, num_x, num_a, num_e)
+    # Measurement OPEQs: sum_{y,b} d[y,b] P(a,b,e|x,y) = 0
+    meas_row_shape = (num_x, num_a, num_e)
     meas_rows_per_opeq = int(np.prod(meas_row_shape))
-    meas_t, meas_x, meas_a, meas_e = np.unravel_index(
+    meas_x, meas_a, meas_e = np.unravel_index(
         np.arange(meas_rows_per_opeq, dtype=int),
         meas_row_shape,
     )
-    for coeffs in scenario.opeq_meas:
+    for coeffs in opeq_meas:
         y_nonzero, b_nonzero = np.nonzero(coeffs)
         coeff_nonzero = coeffs[y_nonzero, b_nonzero].astype(float)
-
         if coeff_nonzero.size == 0:
             continue
 
         cols_matrix = var_index(
-            meas_t[row_axis],
             meas_x[row_axis],
             y_nonzero[coeff_axis],
             meas_a[row_axis],
@@ -385,14 +257,137 @@ def _solve_guessing_lp(
         rows_vals.extend(vals_matrix.tolist())
         rhs.extend([0.0] * meas_rows_per_opeq)
 
-    # Objective:
-    # average over targets of sum_b sum_a P_t(a,b,e=bin(b)|x_t,y_t).
-    obj = np.zeros(num_variables, dtype=float)
-    weight = 1.0 / float(num_targets)
-    for t, (target_x, target_y) in enumerate(target_pairs):
+    return (
+        num_x,
+        num_y,
+        num_a,
+        num_b,
+        num_e,
+        num_variables,
+        var_index,
+        rows_cols,
+        rows_vals,
+        rhs,
+        outcome_to_bin,
+    )
+
+
+def _solve_guessing_lp_hotstart_table(
+    scenario: ContextualityScenario,
+    target_pairs: list[tuple[int, int]] | None = None,
+    bin_outcomes: list[list[int]] | tuple[tuple[int, ...], ...] | None = None,
+) -> np.ndarray:
+    """Solve selected single-target Eve objectives by re-optimizing one primal simplex task."""
+    (
+        num_x,
+        num_y,
+        num_a,
+        num_b,
+        _num_e,
+        num_variables,
+        var_index,
+        rows_cols,
+        rows_vals,
+        rhs,
+        outcome_to_bin,
+    ) = _build_single_model_lp_components(
+        scenario=scenario,
+        bin_outcomes=bin_outcomes,
+    )
+
+    if target_pairs is None:
+        target_pairs_list = list(np.ndindex(num_x, num_y))
+    else:
+        target_pairs_list = [(int(x), int(y)) for x, y in target_pairs]
+        for target_x, target_y in target_pairs_list:
+            if target_x < 0 or target_x >= num_x:
+                raise ValueError(f"x must be in 0..{num_x - 1}.")
+            if target_y < 0 or target_y >= num_y:
+                raise ValueError(f"y must be in 0..{num_y - 1}.")
+
+    objective_indices: dict[tuple[int, int], np.ndarray] = {}
+    for target_x, target_y in target_pairs_list:
+        idx_list: list[int] = []
         for b, a in np.ndindex(num_b, num_a):
             guessed_e = int(outcome_to_bin[b])
-            obj[var_index(t, target_x, target_y, a, b, guessed_e)] += weight
+            idx_list.append(var_index(target_x, target_y, a, b, guessed_e))
+        objective_indices[(target_x, target_y)] = np.asarray(idx_list, dtype=int)
+
+    p_guess_table = np.full((num_x, num_y), np.nan, dtype=float)
+    with mosek.Env() as env:
+        with env.Task(0, 0) as task:
+            task.appendvars(num_variables)
+            task.putvarboundsliceconst(0, num_variables, mosek.boundkey.lo, 0.0, 0.0)
+
+            num_constraints = len(rows_cols)
+            task.appendcons(num_constraints)
+            for row_index in range(num_constraints):
+                task.putarow(row_index, rows_cols[row_index], rows_vals[row_index])
+                row_rhs = rhs[row_index]
+                task.putconbound(row_index, mosek.boundkey.fx, row_rhs, row_rhs)
+
+            task.putintparam(mosek.iparam.optimizer, mosek.optimizertype.primal_simplex)
+            task.putintparam(mosek.iparam.sim_hotstart, mosek.simhotstart.status_keys)
+            task.putobjsense(mosek.objsense.maximize)
+
+            previous_idx: np.ndarray | None = None
+            for target_x, target_y in target_pairs_list:
+                if previous_idx is not None and previous_idx.size:
+                    task.putclist(previous_idx.tolist(), [0.0] * int(previous_idx.size))
+
+                current_idx = objective_indices[(target_x, target_y)]
+                task.putclist(current_idx.tolist(), [1.0] * int(current_idx.size))
+                termination_code = task.optimize()
+                p_guess_table[target_x, target_y] = _get_optimal_primal_objective(
+                    task,
+                    failure_context=(
+                        f"single-target LP for (x={target_x}, y={target_y})"
+                    ),
+                    termination_code=termination_code,
+                )
+                previous_idx = current_idx
+    return p_guess_table
+
+
+def _solve_guessing_lp_aggregate_objective(
+    scenario: ContextualityScenario,
+    objective_terms: list[tuple[int, int, float]],
+    bin_outcomes: list[list[int]] | tuple[tuple[int, ...], ...] | None = None,
+) -> float:
+    """Solve one LP with a weighted aggregate objective over target settings."""
+    (
+        num_x,
+        num_y,
+        num_a,
+        num_b,
+        _num_e,
+        num_variables,
+        var_index,
+        rows_cols,
+        rows_vals,
+        rhs,
+        outcome_to_bin,
+    ) = _build_single_model_lp_components(
+        scenario=scenario,
+        bin_outcomes=bin_outcomes,
+    )
+
+    if len(objective_terms) == 0:
+        raise ValueError("objective_terms must be non-empty.")
+
+    objective_coeffs: dict[int, float] = {}
+    for target_x, target_y, weight in objective_terms:
+        x = int(target_x)
+        y = int(target_y)
+        w = float(weight)
+        if x < 0 or x >= num_x:
+            raise ValueError(f"x must be in 0..{num_x - 1}.")
+        if y < 0 or y >= num_y:
+            raise ValueError(f"y must be in 0..{num_y - 1}.")
+        for b, a in np.ndindex(num_b, num_a):
+            guessed_e = int(outcome_to_bin[b])
+            idx = int(var_index(x, y, a, b, guessed_e))
+            objective_coeffs[idx] = objective_coeffs.get(idx, 0.0) + w
 
     with mosek.Env() as env:
         with env.Task(0, 0) as task:
@@ -406,23 +401,50 @@ def _solve_guessing_lp(
                 row_rhs = rhs[row_index]
                 task.putconbound(row_index, mosek.boundkey.fx, row_rhs, row_rhs)
 
-            obj_idx = [i for i, c in enumerate(obj) if c != 0.0]
-            obj_val = [float(obj[i]) for i in obj_idx]
-            if obj_idx:
+            if objective_coeffs:
+                obj_idx = list(objective_coeffs.keys())
+                obj_val = [float(objective_coeffs[idx]) for idx in obj_idx]
                 task.putclist(obj_idx, obj_val)
 
+            task.putintparam(mosek.iparam.optimizer, mosek.optimizertype.primal_simplex)
             task.putobjsense(mosek.objsense.maximize)
-            task.optimize()
+            termination_code = task.optimize()
+            return _get_optimal_primal_objective(
+                task,
+                failure_context=(
+                    f"aggregate-objective LP (num_terms={len(objective_terms)})"
+                ),
+                termination_code=termination_code,
+            )
 
-            acceptable_statuses = {mosek.solsta.optimal}
-            if hasattr(mosek.solsta, "integer_optimal"):
-                acceptable_statuses.add(mosek.solsta.integer_optimal)
-            for soltype in (mosek.soltype.itr, mosek.soltype.bas):
-                try:
-                    solsta = task.getsolsta(soltype)
-                except mosek.Error:
-                    continue
-                if solsta in acceptable_statuses:
-                    return float(task.getprimalobj(soltype))
 
-    raise RuntimeError("LP solve failed: MOSEK did not return an optimal solution.")
+def _get_optimal_primal_objective(
+    task: mosek.Task,
+    failure_context: str | None = None,
+    termination_code: object | None = None,
+) -> float:
+    """Extract an optimal LP objective from MOSEK task solutions."""
+    acceptable_statuses = {mosek.solsta.optimal}
+    if hasattr(mosek.solsta, "integer_optimal"):
+        acceptable_statuses.add(mosek.solsta.integer_optimal)
+    status_report: list[str] = []
+    for soltype in (mosek.soltype.itr, mosek.soltype.bas):
+        try:
+            solsta = task.getsolsta(soltype)
+        except mosek.Error:
+            status_report.append(f"{soltype}: solsta unavailable")
+            continue
+        try:
+            prosta = task.getprosta(soltype)
+        except mosek.Error:
+            prosta = "unavailable"
+        status_report.append(f"{soltype}: solsta={solsta}, prosta={prosta}")
+        if solsta in acceptable_statuses:
+            return float(task.getprimalobj(soltype))
+    context_prefix = f"{failure_context}. " if failure_context else ""
+    trm = f" termination={termination_code}." if termination_code is not None else ""
+    status_text = " | ".join(status_report) if status_report else "no solution-status information"
+    raise RuntimeError(
+        f"{context_prefix}LP solve failed: MOSEK did not return an optimal solution.{trm} "
+        f"statuses: {status_text}"
+    )
