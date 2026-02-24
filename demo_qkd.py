@@ -57,41 +57,46 @@ def _format_decimal(value: float, decimals: int = 3) -> str:
 def _print_guessing_probability_grids(
     scenario: ContextualityScenario,
     measurement_indices: list[tuple[int, ...]],
-    bin_outcomes: list[list[int]] | tuple[tuple[int, ...], ...] | None = None,
     precision: int = 3,
     include_keyrate_pairs: bool = True,
     keyrate_threshold: float = 0.1,
+    guess_who: str = "Bob",
 ) -> None:
-    p_guess_eve, keyrate_table = analyze_scenario(
-        scenario=scenario,
-        bin_outcomes=bin_outcomes,
-    )
+    target = scenario._normalize_guess_who(guess_who)
+    p_guess_eve, keyrate_table = analyze_scenario(scenario=scenario, guess_who=target)
     num_x = scenario.X_cardinality
     num_y = scenario.Y_cardinality
-    p_guess_alice = np.empty((num_x, num_y), dtype=float)
 
-    for x, y in np.ndindex(num_x, num_y):
-        p_guess_alice[x, y] = scenario.alice_optimal_guessing_probability(
-            x=x,
-            y=y,
-            bin_outcomes=bin_outcomes,
-        )
+    if target == "Bob":
+        p_guess_native = scenario.alice_optimal_guessing_bob_probability
+        target_label = "Bob's outcome"
+        native_label = "Alice optimal"
+    elif target == "Alice":
+        p_guess_native = scenario.bob_optimal_guessing_alice
+        target_label = "Alice's outcome"
+        native_label = "Bob optimal"
+    else:
+        p_guess_native = scenario.largest_joint_probability
+        target_label = "the joint (Alice, Bob) outcome pair"
+        native_label = "Largest joint"
 
     float_formatter = {"float_kind": lambda value: _format_decimal(value, decimals=precision)}
-    target_label = "Bob's outcome bins" if bin_outcomes is not None else "Bob's outcome"
     print(f"\nEve optimal guessing probabilities for {target_label} (rows: x, columns: y):")
     print(np.array2string(p_guess_eve, formatter=float_formatter))
-    print(f"\nAlice optimal guessing probabilities for {target_label} (rows: x, columns: y):")
-    print(np.array2string(p_guess_alice, formatter=float_formatter))
+    print(f"\n{native_label} guessing probabilities for {target_label} (rows: x, columns: y):")
+    print(np.array2string(p_guess_native, formatter=float_formatter))
     if include_keyrate_pairs:
         qualifying_pairs = [
             (x, y, keyrate_table[x, y])
             for x, y in np.ndindex(num_x, num_y)
             if keyrate_table[x, y] > keyrate_threshold
         ]
-        print(
-            "\nStrictly-positive key rate pairings:"
-        )
+        if target == "Bob":
+            print("\nTaking Bob's outcomes as the master key, then the strictly positive key rate pairings are:")
+        elif target == "Alice":
+            print("\nTaking Alice's outcomes as the master key, then the strictly positive key rate pairings are:")
+        else:
+            print("\nTaking joint (Alice, Bob) outcomes as the master key, then the strictly positive key rate pairings are:")
         if not qualifying_pairs:
             print("none")
         else:
@@ -110,13 +115,13 @@ def _print_manual_target_robustness(scenario: ContextualityScenario, example_lab
 
 
 def _print_measurement_index_sets(measurement_indices: list[tuple[int, ...]]) -> None:
-    print("\nProvided measurement index sets (no inference):")
+    print("\nProvided measurement index sets:")
     for y, idx in enumerate(measurement_indices):
         print(f"y={y}: effects {idx}")
 
 
 def _print_preparation_index_sets(preparation_indices: list[tuple[int, ...]]) -> None:
-    print("\nProvided preparation index sets (no inference):")
+    print("\nProvided preparation index sets:")
     for x, idx in enumerate(preparation_indices):
         print(f"x={x}: preparations {idx}")
 
@@ -206,6 +211,7 @@ def main() -> None:
     _print_guessing_probability_grids(
         scenario_example_1,
         measurement_indices_example_1,
+        guess_who="Bob",
     )
     _print_manual_target_robustness(scenario_example_1, "Example 1")
 
@@ -243,6 +249,7 @@ def main() -> None:
     _print_guessing_probability_grids(
         scenario_example_2,
         measurement_indices_example_2,
+        guess_who="Bob",
     )
     _print_manual_target_robustness(scenario_example_2, "Example 2")
 
@@ -280,7 +287,11 @@ def main() -> None:
         precision=3,
         representation="symbolic",
     )
-    _print_guessing_probability_grids(scenario_example_3, measurement_indices_example_3)
+    _print_guessing_probability_grids(
+        scenario_example_3,
+        measurement_indices_example_3,
+        guess_who="Bob",
+    )
     _print_manual_target_robustness(scenario_example_3, "Example 3")
 
     # Example 4: Cabello-style 18-ray KS set in d=4, using GPT constructor directly.
@@ -349,7 +360,11 @@ def main() -> None:
     _print_preparation_index_sets(preparation_indices_example_4)
     _print_measurement_index_sets(measurement_indices_example_4)
     _print_measurement_operational_equivalences(scenario_example_4)
-    _print_guessing_probability_grids(scenario_example_4, measurement_indices_example_4)
+    _print_guessing_probability_grids(
+        scenario_example_4,
+        measurement_indices_example_4,
+        guess_who="Bob",
+    )
     _print_manual_target_robustness(scenario_example_4, "Example 4")
 
     # Example 5: Peres 24-ray construction restricted to 6 disjoint bases.
@@ -412,7 +427,11 @@ def main() -> None:
     _print_preparation_index_sets(preparation_indices_example_5)
     _print_measurement_index_sets(measurement_indices_example_5)
     _print_measurement_operational_equivalences(scenario_example_5)
-    _print_guessing_probability_grids(scenario_example_5, measurement_indices_example_5)
+    _print_guessing_probability_grids(
+        scenario_example_5,
+        measurement_indices_example_5,
+        guess_who="Bob",
+    )
     _print_manual_target_robustness(scenario_example_5, "Example 5")
 
 

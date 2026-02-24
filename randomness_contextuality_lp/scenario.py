@@ -10,7 +10,6 @@ Data conventions used in this module:
 
 from __future__ import annotations
 
-import math
 import warnings
 from functools import cached_property
 from typing import Literal
@@ -19,6 +18,9 @@ import numpy as np
 import sympy as sp
 
 from .linalg_utils import null_space_basis
+
+
+GuessWho = Literal["Bob", "Alice", "Both"]
 
 
 class ContextualityScenario:
@@ -67,8 +69,8 @@ class ContextualityScenario:
     B_cardinality: int
     atol: float
     verbose: bool
-    _p_guess_eve_table: np.ndarray | None
-    _keyrate_table: np.ndarray | None
+    _p_guess_eve_tables: dict[GuessWho, np.ndarray]
+    _keyrate_tables: dict[GuessWho, np.ndarray]
 
     def __init__(
         self,
@@ -87,8 +89,8 @@ class ContextualityScenario:
         self.X_cardinality, self.Y_cardinality, self.A_cardinality, self.B_cardinality = (
             self.data_symbolic.shape
         )
-        self._p_guess_eve_table = None
-        self._keyrate_table = None
+        self._p_guess_eve_tables = {}
+        self._keyrate_tables = {}
 
         if opeq_preps is None:
             if self.verbose:
@@ -149,37 +151,64 @@ class ContextualityScenario:
         """Backward-compatible numeric measurement OPEQ alias."""
         return self.opeq_meas_numeric
 
-    @property
-    def p_guess_eve_table(self) -> np.ndarray | None:
-        """Cached Eve guessing-probability table from ``randomness.analyze_scenario``."""
-        return self._p_guess_eve_table
+    @staticmethod
+    def _normalize_guess_who(guess_who: str | None) -> GuessWho:
+        """Normalize guess target selector to canonical capitalization."""
+        if guess_who is None:
+            return "Bob"
 
-    @p_guess_eve_table.setter
-    def p_guess_eve_table(self, values: np.ndarray | None) -> None:
+        normalized = str(guess_who).strip().lower()
+        if normalized == "bob":
+            return "Bob"
+        if normalized == "alice":
+            return "Alice"
+        if normalized == "both":
+            return "Both"
+        raise ValueError("guess_who must be one of 'Bob', 'Alice', or 'Both' (case-insensitive).")
+
+    def p_guess_eve_table(self, guess_who: str = "Bob") -> np.ndarray | None:
+        """Return cached Eve guessing table for selected target, if available."""
+        target = self._normalize_guess_who(guess_who)
+        return self._p_guess_eve_tables.get(target, None)
+
+    def set_p_guess_eve_table(
+        self,
+        values: np.ndarray | None,
+        guess_who: str = "Bob",
+    ) -> None:
+        """Store or clear cached Eve guessing table for selected target."""
+        target = self._normalize_guess_who(guess_who)
         if values is None:
-            self._p_guess_eve_table = None
+            self._p_guess_eve_tables.pop(target, None)
             return
+
         arr = np.asarray(values, dtype=float)
         expected_shape = (self.X_cardinality, self.Y_cardinality)
         if arr.shape != expected_shape:
             raise ValueError(f"p_guess_eve_table must have shape {expected_shape}.")
-        self._p_guess_eve_table = arr
+        self._p_guess_eve_tables[target] = arr
 
-    @property
-    def keyrate_table(self) -> np.ndarray | None:
-        """Cached key-rate table from ``randomness.analyze_scenario``."""
-        return self._keyrate_table
+    def keyrate_table(self, guess_who: str = "Bob") -> np.ndarray | None:
+        """Return cached key-rate table for selected target, if available."""
+        target = self._normalize_guess_who(guess_who)
+        return self._keyrate_tables.get(target, None)
 
-    @keyrate_table.setter
-    def keyrate_table(self, values: np.ndarray | None) -> None:
+    def set_keyrate_table(
+        self,
+        values: np.ndarray | None,
+        guess_who: str = "Bob",
+    ) -> None:
+        """Store or clear cached key-rate table for selected target."""
+        target = self._normalize_guess_who(guess_who)
         if values is None:
-            self._keyrate_table = None
+            self._keyrate_tables.pop(target, None)
             return
+
         arr = np.asarray(values, dtype=float)
         expected_shape = (self.X_cardinality, self.Y_cardinality)
         if arr.shape != expected_shape:
             raise ValueError(f"keyrate_table must have shape {expected_shape}.")
-        self._keyrate_table = arr
+        self._keyrate_tables[target] = arr
 
     @cached_property
     def data_numeric(self) -> np.ndarray:
@@ -272,129 +301,115 @@ class ContextualityScenario:
         self.validate_opeqs_multisource(self.opeq_preps_symbolic)
         self.validate_opeqs_multimeter(self.opeq_meas_symbolic)
 
-    def alice_optimal_guessing_probability(
-        self,
-        x: int = 0,
-        y: int = 0,
-        bin_outcomes: list[list[int]] | tuple[tuple[int, ...], ...] | None = None,
-    ) -> float:
-        """Return Alice's optimal guess probability for Bob's outcome at fixed ``(x,y)``.
-
-        Alice is assumed to know ``a`` and, after settings are announced, can choose
-        the best ``b`` for each ``a``. This computes:
-        ``sum_a p(a|x,y) max_b p(b|x,y,a)``.
-
-        If ``bin_outcomes`` is provided, Alice guesses which bin Bob's outcome falls
-        into, where bins are provided as e.g. ``[[0, 1], [2, 3]]``.
-        """
-        if x < 0 or x >= self.X_cardinality:
-            raise ValueError(f"x must be in 0..{self.X_cardinality - 1}.")
-        if y < 0 or y >= self.Y_cardinality:
-            raise ValueError(f"y must be in 0..{self.Y_cardinality - 1}.")
-
-        slice_xy = self.data_numeric[x, y, :, :]
-        if bin_outcomes is None:
-            # Equivalent to sum_a max_b P(a,b|x,y), avoiding division by tiny p(a|x,y).
-            return float(np.max(slice_xy, axis=1).sum())
-
-        bins = self._normalize_bob_outcome_bins(
-            bin_outcomes=bin_outcomes,
-            num_b=self.B_cardinality,
-        )
-        bin_masses = np.stack([slice_xy[:, idx].sum(axis=1) for idx in bins], axis=1)
-        return float(np.max(bin_masses, axis=1).sum())
-
-    def alice_optimal_average_guessing_probability(
-        self,
-        bin_outcomes: list[list[int]] | tuple[tuple[int, ...], ...] | None = None,
-    ) -> float:
-        """Return Alice's optimal guess probability averaged uniformly over all ``(x,y)``.
-
-        Set ``bin_outcomes`` to a bin partition (for example ``[[0, 1], [2, 3]]``)
-        to compute average guessing probability of binned outcomes.
-        """
-        if bin_outcomes is None:
-            max_over_b = np.max(self.data_numeric, axis=3)  # shape (X, Y, A)
-            per_xy = max_over_b.sum(axis=2)  # shape (X, Y)
-            return float(per_xy.mean())
-
-        bins = self._normalize_bob_outcome_bins(
-            bin_outcomes=bin_outcomes,
-            num_b=self.B_cardinality,
-        )
-        bin_masses = np.stack([self.data_numeric[..., idx].sum(axis=3) for idx in bins], axis=3)
-        per_xy = np.max(bin_masses, axis=3).sum(axis=2)  # shape (X, Y)
-        return float(per_xy.mean())
-
-    def alice_optimal_guessing_min_entropy_bits(
-        self,
-        x: int = 0,
-        y: int = 0,
-        bin_outcomes: list[list[int]] | tuple[tuple[int, ...], ...] | None = None,
-    ) -> float:
-        """Return Alice min-entropy in bits at fixed ``(x,y)``."""
-        p_guess = self.alice_optimal_guessing_probability(
-            x=x,
-            y=y,
-            bin_outcomes=bin_outcomes,
-        )
-        if p_guess <= 0.0:
-            raise ValueError("Alice guessing probability must be strictly positive.")
-        return float(-math.log2(p_guess))
-
-    def alice_optimal_average_guessing_min_entropy_bits(
-        self,
-        bin_outcomes: list[list[int]] | tuple[tuple[int, ...], ...] | None = None,
-    ) -> float:
-        """Return min-entropy in bits from Alice's average optimal guessing probability."""
-        p_guess = self.alice_optimal_average_guessing_probability(
-            bin_outcomes=bin_outcomes,
-        )
-        if p_guess <= 0.0:
-            raise ValueError("Alice average guessing probability must be strictly positive.")
-        return float(-math.log2(p_guess))
-
-    def conditional_entropy(
-        self,
-        x: int = 0,
-        y: int = 0,
-    ) -> float:
-        """Return ``H(B|A,x,y)`` in bits for fixed ``(x,y)``."""
-        if x < 0 or x >= self.X_cardinality:
-            raise ValueError(f"x must be in 0..{self.X_cardinality - 1}.")
-        if y < 0 or y >= self.Y_cardinality:
-            raise ValueError(f"y must be in 0..{self.Y_cardinality - 1}.")
-
-        slice_xy = self.data_numeric[x, y, :, :]
-        p_a = slice_xy.sum(axis=1)  # shape (A,)
-        return self._shannon_entropy_bits(slice_xy) - self._shannon_entropy_bits(
-            p_a,
-            atol=self.atol,
-        )
-
-    def alice_conditional_entropy_bits(
-        self,
-        x: int = 0,
-        y: int = 0,
-    ) -> float:
-        """Alias for ``H(B|A,x,y)`` in bits."""
-        return self.conditional_entropy(x=x, y=y)
-
-    def average_conditional_entropy(self) -> float:
-        """Return uniform average of ``H(B|A,x,y)`` over all setting pairs."""
-        return float(np.mean(self.alice_conditional_entropy_table))
-
-    def alice_average_conditional_entropy_bits(self) -> float:
-        """Alias for average ``H(B|A,x,y)`` in bits."""
-        return self.average_conditional_entropy()
+    @cached_property
+    def alice_optimal_guessing_bob_probability(self) -> np.ndarray:
+        """Table of Alice's optimal probability to guess Bob's outcome, shape ``(X, Y)``."""
+        max_over_b = np.max(self.data_numeric, axis=3)  # shape (X, Y, A)
+        return max_over_b.sum(axis=2)
 
     @cached_property
-    def alice_conditional_entropy_table(self) -> np.ndarray:
+    def alice_optimal_average_guessing_bob_probability(self) -> float:
+        """Uniform average of Alice's optimal probability to guess Bob's outcome."""
+        return float(np.mean(self.alice_optimal_guessing_bob_probability))
+
+    @cached_property
+    def alice_optimal_guessing_bob_min_entropy(self) -> np.ndarray:
+        """Table of min-entropy from Alice's Bob-guessing probabilities, shape ``(X, Y)``."""
+        p_guess_table = self.alice_optimal_guessing_bob_probability
+        if np.any(p_guess_table <= 0.0):
+            raise ValueError("Alice guessing probabilities must be strictly positive.")
+        return -np.log2(p_guess_table)
+
+    @cached_property
+    def alice_optimal_average_guessing_bob_min_entropy(self) -> float:
+        """Return min-entropy from Alice's average optimal Bob-guessing probability."""
+        p_guess = self.alice_optimal_average_guessing_bob_probability
+        if p_guess <= 0.0:
+            raise ValueError("Alice average guessing probability must be strictly positive.")
+        return float(-np.log2(p_guess))
+
+    @cached_property
+    def bob_optimal_guessing_alice(self) -> np.ndarray:
+        """Table of Bob's optimal probability to guess Alice's outcome, shape ``(X, Y)``."""
+        max_over_a = np.max(self.data_numeric, axis=2)  # shape (X, Y, B)
+        return max_over_a.sum(axis=2)
+
+    @property
+    def bob_optimal_guessing_alice_probability(self) -> np.ndarray:
+        """Backward-compatible alias for ``bob_optimal_guessing_alice``."""
+        return self.bob_optimal_guessing_alice
+
+    @cached_property
+    def largest_joint_probability(self) -> np.ndarray:
+        """Table of ``max_{a,b} P(a,b|x,y)`` values, shape ``(X, Y)``."""
+        return np.max(self.data_numeric, axis=(2, 3))
+
+    @cached_property
+    def bob_optimal_average_guessing_alice_probability(self) -> float:
+        """Uniform average of Bob's optimal probability to guess Alice's outcome."""
+        return float(np.mean(self.bob_optimal_guessing_alice))
+
+    @cached_property
+    def bob_optimal_guessing_alice_min_entropy(self) -> np.ndarray:
+        """Table of min-entropy from Bob's Alice-guessing probabilities, shape ``(X, Y)``."""
+        p_guess_table = self.bob_optimal_guessing_alice
+        if np.any(p_guess_table <= 0.0):
+            raise ValueError("Bob guessing probabilities must be strictly positive.")
+        return -np.log2(p_guess_table)
+
+    @cached_property
+    def bob_optimal_average_guessing_alice_min_entropy(self) -> float:
+        """Return min-entropy from Bob's average optimal Alice-guessing probability."""
+        p_guess = self.bob_optimal_average_guessing_alice_probability
+        if p_guess <= 0.0:
+            raise ValueError("Bob average guessing probability must be strictly positive.")
+        return float(-np.log2(p_guess))
+
+    @cached_property
+    def conditional_entropy_table_bob_given_alice(self) -> np.ndarray:
         """Table of ``H(B|A,x,y)`` with shape ``(X, Y)``."""
+        joint_entropy_table = self.conditional_entropy_table_alice_and_bob
         table = np.zeros((self.X_cardinality, self.Y_cardinality), dtype=float)
         for x, y in np.ndindex(self.X_cardinality, self.Y_cardinality):
-            table[x, y] = self.conditional_entropy(x=x, y=y)
+            slice_xy = self.data_numeric[x, y, :, :]
+            marginal_alice = slice_xy.sum(axis=1)
+            table[x, y] = joint_entropy_table[x, y] - self._shannon_entropy(
+                marginal_alice,
+                atol=self.atol,
+            )
         return table
+
+    @cached_property
+    def conditional_entropy_table_alice_given_bob(self) -> np.ndarray:
+        """Table of ``H(A|B,x,y)`` with shape ``(X, Y)``."""
+        joint_entropy_table = self.conditional_entropy_table_alice_and_bob
+        table = np.zeros((self.X_cardinality, self.Y_cardinality), dtype=float)
+        for x, y in np.ndindex(self.X_cardinality, self.Y_cardinality):
+            slice_xy = self.data_numeric[x, y, :, :]
+            marginal_bob = slice_xy.sum(axis=0)
+            table[x, y] = joint_entropy_table[x, y] - self._shannon_entropy(
+                marginal_bob,
+                atol=self.atol,
+            )
+        return table
+
+    @cached_property
+    def conditional_entropy_table_alice_and_bob(self) -> np.ndarray:
+        """Table of ``H(A,B|x,y)`` with shape ``(X, Y)``."""
+        table = np.zeros((self.X_cardinality, self.Y_cardinality), dtype=float)
+        for x, y in np.ndindex(self.X_cardinality, self.Y_cardinality):
+            table[x, y] = self._shannon_entropy(self.data_numeric[x, y, :, :], atol=self.atol)
+        return table
+
+    @cached_property
+    def average_conditional_entropy_bob_given_alice(self) -> float:
+        """Uniform average of ``H(B|A,x,y)`` over all setting pairs."""
+        return float(np.mean(self.conditional_entropy_table_bob_given_alice))
+
+    @cached_property
+    def average_conditional_entropy_alice_given_bob(self) -> float:
+        """Uniform average of ``H(A|B,x,y)`` over all setting pairs."""
+        return float(np.mean(self.conditional_entropy_table_alice_given_bob))
 
     def format_probabilities(
         self,
@@ -545,42 +560,6 @@ class ContextualityScenario:
             warnings.warn(message, UserWarning, stacklevel=3)
 
     @staticmethod
-    def _normalize_bob_outcome_bins(
-        bin_outcomes: list[list[int]] | tuple[tuple[int, ...], ...] | None,
-        num_b: int,
-    ) -> list[np.ndarray]:
-        """Normalize a bin-partition of Bob outcomes into validated index arrays."""
-        if bin_outcomes is None:
-            return [np.array([b], dtype=int) for b in range(num_b)]
-
-        bins: list[np.ndarray] = []
-        seen = np.full(num_b, False, dtype=bool)
-        for bin_id, outcome_group in enumerate(bin_outcomes):
-            indices = np.asarray(list(outcome_group), dtype=int).reshape(-1)
-            if indices.size == 0:
-                raise ValueError(f"bin_outcomes[{bin_id}] cannot be empty.")
-            for b in indices:
-                if b < 0 or b >= num_b:
-                    raise ValueError(f"Bob outcome index {int(b)} is out of range 0..{num_b - 1}.")
-                if seen[b]:
-                    raise ValueError(
-                        f"Bob outcome index {int(b)} appears in more than one bin."
-                    )
-                seen[b] = True
-            bins.append(indices)
-
-        if not bins:
-            raise ValueError("bin_outcomes must contain at least one bin.")
-        missing = np.where(~seen)[0]
-        if missing.size:
-            missing_list = ", ".join(str(int(v)) for v in missing)
-            raise ValueError(
-                "bin_outcomes must cover every Bob outcome exactly once. "
-                f"Missing: {missing_list}."
-            )
-        return bins
-
-    @staticmethod
     def _normalize_opeq_array(opeqs: np.ndarray, size_1: int, size_2: int) -> np.ndarray:
         """Normalize operational-equivalence input shape to ``(N, size_1, size_2)``."""
         if opeqs.ndim == 2:
@@ -707,8 +686,8 @@ class ContextualityScenario:
         return ContextualityScenario._format_symbolic_matrix_single_line(matrix, precision=precision)
 
     @staticmethod
-    def _shannon_entropy_bits(probabilities: np.ndarray, atol: float = 1e-9) -> float:
-        """Return Shannon entropy in bits for a numeric probability vector/table."""
+    def _shannon_entropy(probabilities: np.ndarray, atol: float = 1e-9) -> float:
+        """Return Shannon entropy for a numeric probability vector/table."""
         probs = np.asarray(probabilities, dtype=float).reshape(-1)
         if probs.size == 0:
             raise ValueError("Cannot compute entropy of an empty distribution.")

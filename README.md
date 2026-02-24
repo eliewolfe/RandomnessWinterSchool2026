@@ -144,8 +144,8 @@ Core responsibilities:
 - exposes cardinalities (`X,Y,A,B`),
 - offers printing/formatting utilities,
 - computes Alice-side guessing benchmarks:
-  - `alice_optimal_guessing_probability(x,y)`
-  - `alice_optimal_average_guessing_probability()`
+  - `alice_optimal_guessing_bob_probability` (cached `(X,Y)` table)
+  - `alice_optimal_average_guessing_bob_probability`
 
 Important behavior:
 
@@ -184,10 +184,10 @@ Contains MOSEK LPs for Eve's guessing probability and entropy helpers.
 
 Main functions:
 
-- `eve_optimal_guessing_probability(scenario, x, y)`
-- `eve_optimal_average_guessing_probability(scenario)`
-- `analyze_scenario(scenario)` (fills Eve guessing and key-rate tables)
-- `min_entropy_bits(p_guess)`
+- `eve_optimal_guessing_probability(scenario, x, y, guess_who="Bob")`
+- `eve_optimal_average_guessing_probability(scenario, guess_who="Bob")`
+- `analyze_scenario(scenario, guess_who="Bob")` (fills Eve guessing and key-rate tables)
+- `min_entropy(p_guess)`
 
 Notes:
 
@@ -245,11 +245,15 @@ Conventions used there:
 The Eve LP asks:
 
 - given observed behavior `P(a,b|x,y)` and OPEQs,
-- what is the maximum probability that an adversary Eve can guess Bob's output at chosen settings?
+- what is the maximum probability that an adversary Eve can guess a chosen target (`Bob`, `Alice`, or `Both`) at chosen settings?
 
 The LP introduces a tripartite extension `P_t(a,b,e|x,y)` (indexed by target `t` for averaging scenarios).
 
-Eve's guess is encoded as `e` and the objective rewards events with `e=b` at target settings.
+Eve's guess is encoded as `e` and the objective rewards:
+
+- `e=b` when `guess_who="Bob"` (default),
+- `e=a` when `guess_who="Alice"`,
+- `e=(a,b)` when `guess_who="Both"`.
 
 ### Why OPEQ constraints involve grouped parties
 
@@ -291,10 +295,13 @@ Outputs:
 
 ## Alice Guessing Benchmark
 
-`ContextualityScenario` includes a built-in non-LP benchmark:
+`ContextualityScenario` includes built-in non-LP benchmarks:
 
-- `alice_optimal_guessing_probability(x,y)`
-- `alice_optimal_average_guessing_probability()`
+- `alice_optimal_guessing_bob_probability`
+- `alice_optimal_average_guessing_bob_probability`
+- `bob_optimal_guessing_alice`
+- `bob_optimal_average_guessing_alice_probability`
+- `largest_joint_probability`
 
 At fixed `(x,y)`, Alice knows `a`, so she can pick best `b` per `a`:
 
@@ -387,12 +394,12 @@ scenario, measurement_indices = contextuality_scenario_from_gpt(
 from randomness_contextuality_lp.randomness import (
     eve_optimal_guessing_probability,
     eve_optimal_average_guessing_probability,
-    min_entropy_bits,
+    min_entropy,
 )
 
 p_target = eve_optimal_guessing_probability(scenario, x=0, y=0)
 p_avg = eve_optimal_average_guessing_probability(scenario)
-hmin = min_entropy_bits(p_target)
+hmin = min_entropy(p_target)
 ```
 
 ### 4) Contextuality robustness

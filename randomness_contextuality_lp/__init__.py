@@ -4,7 +4,7 @@ from .randomness import (
     analyze_scenario,
     eve_optimal_average_guessing_probability,
     eve_optimal_guessing_probability,
-    min_entropy_bits,
+    min_entropy,
 )
 from .contextuality import (
     SimplexEmbeddabilityResult,

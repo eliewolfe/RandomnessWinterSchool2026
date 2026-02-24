@@ -3,11 +3,31 @@
 from __future__ import annotations
 
 import math
+from typing import Literal
 
 import mosek
 import numpy as np
 
 from .scenario import ContextualityScenario
+
+
+GuessWho = Literal["Bob", "Alice", "Both"]
+
+
+def _normalize_guess_who(guess_who: str | None) -> GuessWho:
+    """Normalize guess target selector to canonical capitalization."""
+    if guess_who is None:
+        return "Bob"
+
+    normalized = str(guess_who).strip().lower()
+    if normalized == "bob":
+        return "Bob"
+    if normalized == "alice":
+        return "Alice"
+    if normalized == "both":
+        return "Both"
+    raise ValueError("guess_who must be one of 'Bob', 'Alice', or 'Both' (case-insensitive).")
+
 
 def reverse_fano_bound(p_guess: float) -> float:
     """Return a lower bound on conditional Shannon entropy in bits from guessing probability."""
@@ -23,7 +43,8 @@ def reverse_fano_bound(p_guess: float) -> float:
     c = f + 1
     return (c * p_eff - 1) * f * math.log2(f) + (1 - f * p_eff) * c * math.log2(c)
 
-def min_entropy_bits(p_guess: float) -> float:
+
+def min_entropy(p_guess: float) -> float:
     """Return min-entropy in bits from guessing probability."""
     return float(-math.log2(p_guess))
 
@@ -32,7 +53,7 @@ def eve_optimal_guessing_probability(
     scenario: ContextualityScenario,
     x: int = 0,
     y: int = 0,
-    bin_outcomes: list[list[int]] | tuple[tuple[int, ...], ...] | None = None,
+    guess_who: str = "Bob",
 ) -> float:
     """Compute Eve's best guessing probability for one chosen target ``(x, y)``.
 
@@ -47,15 +68,14 @@ def eve_optimal_guessing_probability(
     Build a ``ContextualityScenario`` first (directly, or via
     ``contextuality_scenario_from_gpt`` / ``contextuality_scenario_from_quantum``),
     then call this function with the desired ``x`` and ``y``. Convert the result to
-    min-entropy with ``min_entropy_bits`` if needed.
+    min-entropy with ``min_entropy`` if needed.
 
     Input/output structure
     ----------------------
     Input is a validated ``ContextualityScenario`` and integer indices ``x`` and
-    ``y`` in range. Set ``bin_outcomes`` to a partition of Bob outcomes (for
-    example ``[[0, 1], [2, 3]]``) to guess bins rather than exact outcomes.
-    Output is a single float in ``[0, 1]``: the LP optimum for
-    Eve's guessing probability at that target pair.
+    ``y`` in range. Set ``guess_who`` to ``"Bob"``, ``"Alice"``, or ``"Both"``
+    (case-insensitive). Output is a single float in ``[0, 1]``: the LP optimum
+    for Eve's guessing probability at that target pair.
 
     High-level implementation
     -------------------------
@@ -68,17 +88,18 @@ def eve_optimal_guessing_probability(
     if y < 0 or y >= scenario.Y_cardinality:
         raise ValueError(f"y must be in 0..{scenario.Y_cardinality - 1}.")
 
+    target = _normalize_guess_who(guess_who)
     p_guess = _solve_guessing_lp_aggregate_objective(
         scenario=scenario,
         objective_terms=[(x, y, 1.0)],
-        bin_outcomes=bin_outcomes,
+        guess_who=target,
     )
     return float(p_guess)
 
 
 def eve_optimal_average_guessing_probability(
     scenario: ContextualityScenario,
-    bin_outcomes: list[list[int]] | tuple[tuple[int, ...], ...] | None = None,
+    guess_who: str = "Bob",
 ) -> float:
     """Compute Eve's optimal guessing probability averaged over all ``(x, y)``.
 
@@ -95,10 +116,10 @@ def eve_optimal_average_guessing_probability(
 
     Input/output structure
     ----------------------
-    Input is one ``ContextualityScenario``. Set ``bin_outcomes`` to a partition
-    of Bob outcomes (for example ``[[0, 1], [2, 3]]``) to optimize bin guessing
-    rather than exact outcome guessing. Output is one float in ``[0, 1]``
-    representing the LP optimum of the mean guessing objective over all settings.
+    Input is one ``ContextualityScenario``. Set ``guess_who`` to ``"Bob"``,
+    ``"Alice"``, or ``"Both"`` (case-insensitive). Output is one float in
+    ``[0, 1]`` representing the LP optimum of the mean guessing objective over
+    all settings.
 
     High-level implementation
     -------------------------
@@ -111,17 +132,18 @@ def eve_optimal_average_guessing_probability(
         (x, y, 1.0 / num_targets)
         for x, y in np.ndindex(scenario.X_cardinality, scenario.Y_cardinality)
     ]
+    target = _normalize_guess_who(guess_who)
     p_guess = _solve_guessing_lp_aggregate_objective(
         scenario=scenario,
         objective_terms=objective_terms,
-        bin_outcomes=bin_outcomes,
+        guess_who=target,
     )
     return float(p_guess)
 
 
 def analyze_scenario(
     scenario: ContextualityScenario,
-    bin_outcomes: list[list[int]] | tuple[tuple[int, ...], ...] | None = None,
+    guess_who: str = "Bob",
 ) -> tuple[np.ndarray, np.ndarray]:
     """Compute and cache Eve guessing and key-rate tables on ``scenario``.
 
@@ -130,26 +152,34 @@ def analyze_scenario(
     tuple
         ``(p_guess_eve_table, keyrate_table)``, both with shape ``(X, Y)``.
     """
+    target = _normalize_guess_who(guess_who)
     num_x = scenario.X_cardinality
     num_y = scenario.Y_cardinality
 
     p_guess_eve_table = _solve_guessing_lp_hotstart_table(
         scenario=scenario,
-        bin_outcomes=bin_outcomes,
+        guess_who=target,
     )
+
+    if target == "Bob":
+        conditional_entropy_table = scenario.conditional_entropy_table_bob_given_alice
+    elif target == "Alice":
+        conditional_entropy_table = scenario.conditional_entropy_table_alice_given_bob
+    else:
+        conditional_entropy_table = scenario.conditional_entropy_table_alice_and_bob
 
     keyrate_table = np.zeros_like(p_guess_eve_table)
     for x, y in np.ndindex(num_x, num_y):
-        keyrate_table[x, y] = reverse_fano_bound(p_guess_eve_table[x, y]) - scenario.alice_conditional_entropy_table[x, y]
+        keyrate_table[x, y] = reverse_fano_bound(p_guess_eve_table[x, y]) - conditional_entropy_table[x, y]
 
-    scenario.p_guess_eve_table = p_guess_eve_table
-    scenario.keyrate_table = keyrate_table
+    scenario.set_p_guess_eve_table(p_guess_eve_table, guess_who=target)
+    scenario.set_keyrate_table(keyrate_table, guess_who=target)
     return p_guess_eve_table, keyrate_table
 
 
 def _build_single_model_lp_components(
     scenario: ContextualityScenario,
-    bin_outcomes: list[list[int]] | tuple[tuple[int, ...], ...] | None = None,
+    guess_who: GuessWho,
 ):
     """Build shared single-model LP components used by sweep/single/average objectives."""
     data = scenario.data_numeric
@@ -159,16 +189,23 @@ def _build_single_model_lp_components(
     num_y = scenario.Y_cardinality
     num_a = scenario.A_cardinality
     num_b = scenario.B_cardinality
-    bins = scenario._normalize_bob_outcome_bins(
-        bin_outcomes=bin_outcomes,
-        num_b=num_b,
-    )
-    num_e = len(bins)
-    outcome_to_bin = np.empty(num_b, dtype=int)
-    for bin_id, outcome_indices in enumerate(bins):
-        outcome_to_bin[outcome_indices] = bin_id
+    if guess_who == "Bob":
+        num_e = num_b
+    elif guess_who == "Alice":
+        num_e = num_a
+    elif guess_who == "Both":
+        num_e = num_a * num_b
+    else:
+        raise ValueError("Unsupported guess_who value.")
 
     num_variables = num_x * num_y * num_a * num_b * num_e
+
+    def guess_event_index(a: int, b: int) -> int:
+        if guess_who == "Bob":
+            return int(b)
+        if guess_who == "Alice":
+            return int(a)
+        return int(a * num_b + b)
 
     def var_index(
         x: int | np.ndarray,
@@ -268,14 +305,14 @@ def _build_single_model_lp_components(
         rows_cols,
         rows_vals,
         rhs,
-        outcome_to_bin,
+        guess_event_index,
     )
 
 
 def _solve_guessing_lp_hotstart_table(
     scenario: ContextualityScenario,
     target_pairs: list[tuple[int, int]] | None = None,
-    bin_outcomes: list[list[int]] | tuple[tuple[int, ...], ...] | None = None,
+    guess_who: GuessWho = "Bob",
 ) -> np.ndarray:
     """Solve selected single-target Eve objectives by re-optimizing one primal simplex task."""
     (
@@ -289,10 +326,10 @@ def _solve_guessing_lp_hotstart_table(
         rows_cols,
         rows_vals,
         rhs,
-        outcome_to_bin,
+        guess_event_index,
     ) = _build_single_model_lp_components(
         scenario=scenario,
-        bin_outcomes=bin_outcomes,
+        guess_who=guess_who,
     )
 
     if target_pairs is None:
@@ -308,8 +345,8 @@ def _solve_guessing_lp_hotstart_table(
     objective_indices: dict[tuple[int, int], np.ndarray] = {}
     for target_x, target_y in target_pairs_list:
         idx_list: list[int] = []
-        for b, a in np.ndindex(num_b, num_a):
-            guessed_e = int(outcome_to_bin[b])
+        for a, b in np.ndindex(num_a, num_b):
+            guessed_e = guess_event_index(a, b)
             idx_list.append(var_index(target_x, target_y, a, b, guessed_e))
         objective_indices[(target_x, target_y)] = np.asarray(idx_list, dtype=int)
 
@@ -352,7 +389,7 @@ def _solve_guessing_lp_hotstart_table(
 def _solve_guessing_lp_aggregate_objective(
     scenario: ContextualityScenario,
     objective_terms: list[tuple[int, int, float]],
-    bin_outcomes: list[list[int]] | tuple[tuple[int, ...], ...] | None = None,
+    guess_who: GuessWho = "Bob",
 ) -> float:
     """Solve one LP with a weighted aggregate objective over target settings."""
     (
@@ -366,10 +403,10 @@ def _solve_guessing_lp_aggregate_objective(
         rows_cols,
         rows_vals,
         rhs,
-        outcome_to_bin,
+        guess_event_index,
     ) = _build_single_model_lp_components(
         scenario=scenario,
-        bin_outcomes=bin_outcomes,
+        guess_who=guess_who,
     )
 
     if len(objective_terms) == 0:
@@ -384,8 +421,8 @@ def _solve_guessing_lp_aggregate_objective(
             raise ValueError(f"x must be in 0..{num_x - 1}.")
         if y < 0 or y >= num_y:
             raise ValueError(f"y must be in 0..{num_y - 1}.")
-        for b, a in np.ndindex(num_b, num_a):
-            guessed_e = int(outcome_to_bin[b])
+        for a, b in np.ndindex(num_a, num_b):
+            guessed_e = guess_event_index(a, b)
             idx = int(var_index(x, y, a, b, guessed_e))
             objective_coeffs[idx] = objective_coeffs.get(idx, 0.0) + w
 
