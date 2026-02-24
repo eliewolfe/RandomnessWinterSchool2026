@@ -78,7 +78,7 @@ High-level flow:
 The package uses:
 
 - `data[x, y, a, b] = P(a,b|x,y)`
-- shape `(X, Y, A, B)`
+- padded shape `(X, Y, A_max, B_max)` internally
 
 Indices:
 
@@ -86,6 +86,14 @@ Indices:
 - `y`: measurement setting
 - `a`: source/preparation outcome
 - `b`: measurement outcome
+
+Input options:
+
+- dense input with explicit padded shape `(X, Y, A_max, B_max)`, or
+- ragged nested lists `data[x][y][a][b]` under the model `A=A(x)`, `B=B(y)`.
+
+When ragged input is used, the package pads with zeros and tracks
+`a_cardinality_per_x` and `b_cardinality_per_y`.
 
 Normalization requirement:
 
@@ -100,15 +108,18 @@ Special case:
 
 Preparation OPEQs:
 
-- shape `(N_prep, X, A)` (or `(X,A)` for a single OPEQ),
+- shape `(N_prep, X, A_max)` (or `(X,A_max)` for a single OPEQ) after padding,
 - each OPEQ coefficient array `c[x,a]` must satisfy:
   - `sum_{x,a} c[x,a] P(a,b|x,y) = 0` for all `(y,b)`.
 
 Measurement OPEQs:
 
-- shape `(N_meas, Y, B)` (or `(Y,B)` for a single OPEQ),
+- shape `(N_meas, Y, B_max)` (or `(Y,B_max)` for a single OPEQ) after padding,
 - each OPEQ coefficient array `d[y,b]` must satisfy:
   - `sum_{y,b} d[y,b] P(a,b|x,y) = 0` for all `(x,a)`.
+
+For ragged scenarios, padded coordinates are always enforced as structural zeros by
+automatically injected OPEQ rows.
 
 These are exactly the linear constraints used by the LPs.
 
@@ -139,13 +150,19 @@ This reduces boilerplate and ensures consistent conventions.
 Core responsibilities:
 
 - stores validated `data`, `opeq_preps`, `opeq_meas`,
+- supports ragged inputs and internally pads to dense arrays,
 - discovers missing OPEQs (nullspace-based),
 - validates provided OPEQs,
-- exposes cardinalities (`X,Y,A,B`),
+- exposes cardinalities (`X,Y,A_max,B_max`) plus per-setting cardinalities,
+- exposes validity masks (`valid_a_mask`, `valid_b_mask`, `valid_ab_mask`),
 - offers printing/formatting utilities,
 - computes Alice-side guessing benchmarks:
   - `alice_optimal_guessing_bob_probability` (cached `(X,Y)` table)
   - `alice_optimal_average_guessing_bob_probability`
+
+Constructor notes:
+
+- `ContextualityScenario(data=...)` infers per-setting cardinalities from ragged input directly, from trailing-zero support in dense padded arrays, or from masks in dense `numpy.ma.MaskedArray` input.
 
 Important behavior:
 
@@ -166,7 +183,7 @@ Important functions:
   - `direct_probability_table_from_quantum(...)`
   - `probability_table_from_quantum_via_gpt(...)`
 - GPT helpers:
-  - `probability_table_from_gpt_vectors(...)`
+  - `probability_table_from_gpt_vectors(...)` (supports `return_masked`; default auto-masks mixed-cardinality grouped inputs)
   - `discover_operational_equivalences_from_gpt_objects(...)`
   - `infer_measurements_from_gpt_effect_set(...)`
   - `data_table_from_gpt_states_and_effect_set(...)`
@@ -374,7 +391,7 @@ Both scripts demonstrate the same five scenario families:
 
 1. **Example 1**: qubit Z/X/(X+Z), with inferred measurements and targeted randomness.
 2. **Example 2**: qubit (X+Z)/(X-Z), contrasting randomness with Example 1.
-3. **Example 3**: hexagon GPT construction, manual grouped effects (and grouped preparations in QKD demo).
+3. **Example 3**: hexagon GPT construction with mixed 2-outcome/3-outcome measurements (3-outcome POVMs are rescaled by `2/3`), plus grouped preparations in QKD demo.
 4. **Example 4**: Cabello-style 18-ray GPT construction, repeated effects across contexts, manual grouping.
 5. **Example 5**: Peres 24-ray construction restricted to the 6 Mermin-square contexts (disjoint 4-outcome bases).
 
@@ -454,6 +471,7 @@ r_star = contextuality_robustness_to_dephasing(scenario)
 ## Practical Notes
 
 - Measurement inference from a flat effect set is combinatorial in the number of effects; constrain with `outcomes_per_measurement` when possible.
+- Mixed inferred measurement cardinalities are supported; returned grouped effects are zero-padded internally.
 - If you already know measurement contexts, you can bypass automatic detection and directly build grouped objects (as in Examples 3-5 in both demo scripts).
 - `contextuality_scenario_from_quantum(...)` automatically uses a projector fast path when applicable.
 - For advanced cone work, import directly from `randomness_contextuality_lp.extremal_finders`.

@@ -189,6 +189,8 @@ def _build_single_model_lp_components(
     num_y = scenario.Y_cardinality
     num_a = scenario.A_cardinality
     num_b = scenario.B_cardinality
+    a_cardinality_per_x = scenario.a_cardinality_per_x.astype(int, copy=False)
+    b_cardinality_per_y = scenario.b_cardinality_per_y.astype(int, copy=False)
     if guess_who == "Bob":
         num_e = num_b
     elif guess_who == "Alice":
@@ -228,6 +230,11 @@ def _build_single_model_lp_components(
     rhs: list[float] = []
     row_axis = slice(None), None
     coeff_axis = None, slice(None)
+
+    def append_var_zero_constraint(index: int) -> None:
+        rows_cols.append([int(index)])
+        rows_vals.append([1.0])
+        rhs.append(0.0)
 
     # Data consistency: sum_e P(a,b,e|x,y) = P_data(a,b|x,y)
     e_values = np.arange(num_e, dtype=int)
@@ -294,11 +301,55 @@ def _build_single_model_lp_components(
         rows_vals.extend(vals_matrix.tolist())
         rhs.extend([0.0] * meas_rows_per_opeq)
 
+    # Enforce invalid guess labels to carry zero mass for each target setting pair.
+    if guess_who == "Bob":
+        for x, y in np.ndindex(num_x, num_y):
+            b_count = int(b_cardinality_per_y[y])
+            if b_count >= num_e:
+                continue
+            invalid_e = np.arange(b_count, num_e, dtype=int)
+            for a in range(int(a_cardinality_per_x[x])):
+                for b in range(b_count):
+                    cols = var_index(x, y, a, b, invalid_e)
+                    for idx in np.asarray(cols, dtype=int).tolist():
+                        append_var_zero_constraint(int(idx))
+    elif guess_who == "Alice":
+        for x, y in np.ndindex(num_x, num_y):
+            a_count = int(a_cardinality_per_x[x])
+            if a_count >= num_e:
+                continue
+            invalid_e = np.arange(a_count, num_e, dtype=int)
+            for a in range(a_count):
+                for b in range(int(b_cardinality_per_y[y])):
+                    cols = var_index(x, y, a, b, invalid_e)
+                    for idx in np.asarray(cols, dtype=int).tolist():
+                        append_var_zero_constraint(int(idx))
+    elif guess_who == "Both":
+        for x, y in np.ndindex(num_x, num_y):
+            a_count = int(a_cardinality_per_x[x])
+            b_count = int(b_cardinality_per_y[y])
+            invalid_e: list[int] = []
+            for e in range(num_e):
+                guess_a = int(e // num_b)
+                guess_b = int(e % num_b)
+                if guess_a >= a_count or guess_b >= b_count:
+                    invalid_e.append(e)
+            if not invalid_e:
+                continue
+            invalid_e_arr = np.asarray(invalid_e, dtype=int)
+            for a in range(a_count):
+                for b in range(b_count):
+                    cols = var_index(x, y, a, b, invalid_e_arr)
+                    for idx in np.asarray(cols, dtype=int).tolist():
+                        append_var_zero_constraint(int(idx))
+
     return (
         num_x,
         num_y,
         num_a,
         num_b,
+        a_cardinality_per_x,
+        b_cardinality_per_y,
         num_e,
         num_variables,
         var_index,
@@ -320,6 +371,8 @@ def _solve_guessing_lp_hotstart_table(
         num_y,
         num_a,
         num_b,
+        a_cardinality_per_x,
+        b_cardinality_per_y,
         _num_e,
         num_variables,
         var_index,
@@ -345,9 +398,10 @@ def _solve_guessing_lp_hotstart_table(
     objective_indices: dict[tuple[int, int], np.ndarray] = {}
     for target_x, target_y in target_pairs_list:
         idx_list: list[int] = []
-        for a, b in np.ndindex(num_a, num_b):
-            guessed_e = guess_event_index(a, b)
-            idx_list.append(var_index(target_x, target_y, a, b, guessed_e))
+        for a in range(int(a_cardinality_per_x[target_x])):
+            for b in range(int(b_cardinality_per_y[target_y])):
+                guessed_e = guess_event_index(a, b)
+                idx_list.append(var_index(target_x, target_y, a, b, guessed_e))
         objective_indices[(target_x, target_y)] = np.asarray(idx_list, dtype=int)
 
     p_guess_table = np.full((num_x, num_y), np.nan, dtype=float)
@@ -397,6 +451,8 @@ def _solve_guessing_lp_aggregate_objective(
         num_y,
         num_a,
         num_b,
+        a_cardinality_per_x,
+        b_cardinality_per_y,
         _num_e,
         num_variables,
         var_index,
@@ -421,10 +477,11 @@ def _solve_guessing_lp_aggregate_objective(
             raise ValueError(f"x must be in 0..{num_x - 1}.")
         if y < 0 or y >= num_y:
             raise ValueError(f"y must be in 0..{num_y - 1}.")
-        for a, b in np.ndindex(num_a, num_b):
-            guessed_e = guess_event_index(a, b)
-            idx = int(var_index(x, y, a, b, guessed_e))
-            objective_coeffs[idx] = objective_coeffs.get(idx, 0.0) + w
+        for a in range(int(a_cardinality_per_x[x])):
+            for b in range(int(b_cardinality_per_y[y])):
+                guessed_e = guess_event_index(a, b)
+                idx = int(var_index(x, y, a, b, guessed_e))
+                objective_coeffs[idx] = objective_coeffs.get(idx, 0.0) + w
 
     with mosek.Env() as env:
         with env.Task(0, 0) as task:

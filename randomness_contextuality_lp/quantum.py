@@ -6,6 +6,12 @@ from itertools import combinations
 
 import numpy as np
 
+from ._ragged import (
+    embed_basis_rows_to_padded,
+    flatten_valid_indices,
+    normalize_grouped_vectors_settings_single_outcome,
+    normalize_grouped_vectors_single_setting_many_outcomes,
+)
 from .linalg_utils import null_space_basis
 from .scenario import ContextualityScenario
 
@@ -165,9 +171,10 @@ def probability_table_from_gpt_vectors(
     gpt_effects: np.ndarray,
     source_outcome_distribution: np.ndarray | None = None,
     normalize_source_outcomes: bool = True,
+    return_masked: bool | None = None,
     atol: float = 1e-9,
     drop_tiny_imag: bool = True,
-) -> np.ndarray:
+) -> np.ndarray | np.ma.MaskedArray:
     """Compute GPT probability table from grouped state/effect vectors.
 
     By default this returns a joint table ``P(a,b|x,y)`` by weighting
@@ -176,6 +183,11 @@ def probability_table_from_gpt_vectors(
 
     Set ``normalize_source_outcomes=False`` to return the conditional table
     ``p(b|x,y,a)`` directly.
+    Masked-return policy:
+    - ``return_masked=True``: always return ``np.ma.MaskedArray``.
+    - ``return_masked=False``: always return dense padded ``np.ndarray``.
+    - ``return_masked=None`` (default): auto-return masked when cardinalities
+      vary across settings (mixed outcome counts), else return dense.
     """
     if _contains_sympy_entries(gpt_states) or _contains_sympy_entries(gpt_effects):
         return _probability_table_from_gpt_vectors_symbolic(
@@ -183,35 +195,49 @@ def probability_table_from_gpt_vectors(
             gpt_effects=gpt_effects,
             source_outcome_distribution=source_outcome_distribution,
             normalize_source_outcomes=normalize_source_outcomes,
+            return_masked=return_masked,
             atol=atol,
             drop_tiny_imag=drop_tiny_imag,
         )
-
-    states = np.asarray(gpt_states, dtype=complex)
-    effects = np.asarray(gpt_effects, dtype=complex)
+    states_raw, a_cardinality_per_x, valid_a_mask = normalize_grouped_vectors_settings_single_outcome(
+        gpt_states,
+        name="gpt_states",
+    )
+    effects_raw, b_cardinality_per_y, valid_b_mask = normalize_grouped_vectors_settings_single_outcome(
+        gpt_effects,
+        name="gpt_effects",
+    )
+    states = np.asarray(states_raw, dtype=complex)
+    effects = np.asarray(effects_raw, dtype=complex)
     if states.ndim != 3:
-        raise ValueError("gpt_states must have shape (X, A, K).")
+        raise ValueError("gpt_states must have shape (X, A, K) or ragged equivalent.")
     if effects.ndim != 3:
-        raise ValueError("gpt_effects must have shape (Y, B, K).")
+        raise ValueError("gpt_effects must have shape (Y, B, K) or ragged equivalent.")
     if states.shape[-1] != effects.shape[-1]:
         raise ValueError("State/effect vector dimensions do not match.")
 
+    valid_ab_mask = valid_a_mask[:, np.newaxis, :, np.newaxis] & valid_b_mask[np.newaxis, :, np.newaxis, :]
     probs = np.einsum("xak,ybk->xyab", states, effects)
+    probs = np.where(valid_ab_mask, probs, 0.0)
+
     if normalize_source_outcomes:
-        num_x, _, num_a, _ = probs.shape
-        if source_outcome_distribution is None:
-            p_a_given_x = np.full((num_x, num_a), 1.0 / float(num_a), dtype=float)
-        else:
-            p_a_given_x = np.asarray(source_outcome_distribution, dtype=float)
-            if p_a_given_x.shape != (num_x, num_a):
-                raise ValueError(f"source_outcome_distribution must have shape ({num_x}, {num_a}).")
-            if np.any(p_a_given_x < -atol):
-                raise ValueError("source_outcome_distribution contains negative entries.")
-            if not np.allclose(p_a_given_x.sum(axis=1), 1.0, atol=atol):
-                raise ValueError("Each source_outcome_distribution[x,:] must sum to 1.")
-            p_a_given_x = np.clip(p_a_given_x, 0.0, None)
+        p_a_given_x = _normalize_source_outcome_distribution_numeric(
+            source_outcome_distribution=source_outcome_distribution,
+            a_cardinality_per_x=a_cardinality_per_x,
+            num_x=states.shape[0],
+            a_max=states.shape[1],
+            atol=atol,
+        )
         probs = probs * p_a_given_x[:, np.newaxis, :, np.newaxis]
-    return np.real_if_close(probs) if drop_tiny_imag else probs
+    out = np.real_if_close(probs) if drop_tiny_imag else probs
+    auto_masked = (
+        not np.all(a_cardinality_per_x == a_cardinality_per_x[0])
+        or not np.all(b_cardinality_per_y == b_cardinality_per_y[0])
+    )
+    use_masked = auto_masked if return_masked is None else bool(return_masked)
+    if use_masked:
+        return np.ma.array(out, mask=~valid_ab_mask, copy=False)
+    return out
 
 
 def discover_operational_equivalences_from_gpt_objects(
@@ -229,20 +255,32 @@ def discover_operational_equivalences_from_gpt_objects(
     """
     if _contains_sympy_entries(gpt_objects):
         return _discover_operational_equivalences_from_gpt_objects_symbolic(gpt_objects, atol=atol)
-
-    raw = np.asarray(gpt_objects, dtype=complex)
-    if np.max(np.abs(np.imag(raw))) > atol:
+    objects_raw, outcome_counts, valid_mask = normalize_grouped_vectors_single_setting_many_outcomes(
+        gpt_objects,
+        name="gpt_objects",
+    )
+    raw = np.asarray(objects_raw, dtype=complex)
+    if raw.size and np.max(np.abs(np.imag(raw))) > atol:
         raise ValueError("gpt_objects contains significant imaginary components.")
     objects = np.real_if_close(raw).astype(float)
-    if objects.ndim == 2:
-        objects = objects[np.newaxis, ...]
-    if objects.ndim != 3:
-        raise ValueError("gpt_objects must have shape (O,K) or (S,O,K).")
 
     num_s, num_o, vec_dim = objects.shape
-    matrix = objects.reshape(num_s * num_o, vec_dim)
-    basis = null_space_basis(matrix.T, atol=atol)
-    return basis.reshape(-1, num_s, num_o)
+    matrix_full = objects.reshape(num_s * num_o, vec_dim)
+    valid_indices = flatten_valid_indices(valid_mask)
+    matrix = matrix_full[valid_indices, :]
+    basis_reduced = null_space_basis(matrix.T, atol=atol)
+    basis_full = embed_basis_rows_to_padded(
+        basis_reduced,
+        valid_flat_indices=valid_indices,
+        total_size=num_s * num_o,
+    )
+    basis = basis_full.reshape(-1, num_s, num_o)
+
+    # Keep padded slots structurally zero in returned OPEQs.
+    invalid = ~valid_mask[np.newaxis, :, :]
+    if invalid.any():
+        basis = np.where(invalid, 0.0, basis)
+    return basis
 
 
 def discover_operational_equivalences_from_quantum_states(
@@ -273,7 +311,11 @@ def infer_measurements_from_gpt_effect_set(
     atol: float = 1e-9,
     outcomes_per_measurement: int | None = None,
 ) -> tuple[np.ndarray, list[tuple[int, ...]]]:
-    """Infer measurements as subsets of effects that sum to the unit effect."""
+    """Infer measurements as subsets of effects that sum to the unit effect.
+
+    Returns grouped effects as a zero-padded dense array, so mixed inferred
+    cardinalities are supported.
+    """
     effects = np.asarray(gpt_effect_set, dtype=complex)
     if effects.ndim != 2:
         raise ValueError("gpt_effect_set must have shape (N_effects, K).")
@@ -307,14 +349,11 @@ def infer_measurements_from_gpt_effect_set(
     if not measurement_indices:
         raise ValueError("No measurement subsets summing to unit effect were found.")
 
-    cardinalities = {len(combo) for combo in measurement_indices}
-    if len(cardinalities) != 1:
-        raise ValueError(
-            "Inferred measurements have varying numbers of outcomes; "
-            "set outcomes_per_measurement to choose one cardinality."
-        )
-
-    measurement_effects = np.stack([effects[list(combo)] for combo in measurement_indices], axis=0)
+    max_outcomes = max(len(combo) for combo in measurement_indices)
+    measurement_effects = np.zeros((len(measurement_indices), max_outcomes, k), dtype=complex)
+    for y, combo in enumerate(measurement_indices):
+        for b, effect_idx in enumerate(combo):
+            measurement_effects[y, b, :] = effects[effect_idx]
     return measurement_effects, measurement_indices
 
 
@@ -333,12 +372,6 @@ def data_table_from_gpt_states_and_effect_set(
     - ``(X, K)`` means X settings with one outcome (A=1).
     - ``(X, A, K)`` is used as-is.
     """
-    states = np.asarray(gpt_states, dtype=complex)
-    if states.ndim == 2:
-        states = states[:, np.newaxis, :]
-    if states.ndim != 3:
-        raise ValueError("gpt_states must have shape (X, K) or (X, A, K).")
-
     measurement_effects, measurement_indices = infer_measurements_from_gpt_effect_set(
         gpt_effect_set=gpt_effect_set,
         unit_effect=unit_effect,
@@ -346,7 +379,7 @@ def data_table_from_gpt_states_and_effect_set(
         outcomes_per_measurement=outcomes_per_measurement,
     )
     joint = probability_table_from_gpt_vectors(
-        states,
+        gpt_states,
         measurement_effects,
         source_outcome_distribution=source_outcome_distribution,
         normalize_source_outcomes=True,
@@ -398,32 +431,56 @@ def contextuality_scenario_from_gpt(
     nullspace calculations over GPT vectors, and (4) constructs a
     ``ContextualityScenario`` with those arrays.
     """
-    states = np.asarray(gpt_states, dtype=complex)
-    if states.ndim == 2:
-        states_for_opeq = states[:, np.newaxis, :]
-    elif states.ndim == 3:
-        states_for_opeq = states
+    states_for_prob, a_cardinality_per_x, _ = normalize_grouped_vectors_settings_single_outcome(
+        gpt_states,
+        name="gpt_states",
+    )
+    if _contains_sympy_entries(gpt_states) or _contains_sympy_entries(source_outcome_distribution):
+        p_a_given_x = _normalize_source_outcome_distribution_symbolic(
+            source_outcome_distribution=source_outcome_distribution,
+            a_cardinality_per_x=a_cardinality_per_x,
+            num_x=states_for_prob.shape[0],
+            a_max=states_for_prob.shape[1],
+            atol=atol,
+        )
     else:
-        raise ValueError("gpt_states must have shape (X, K) or (X, A, K).")
+        p_a_given_x = _normalize_source_outcome_distribution_numeric(
+            source_outcome_distribution=source_outcome_distribution,
+            a_cardinality_per_x=a_cardinality_per_x,
+            num_x=states_for_prob.shape[0],
+            a_max=states_for_prob.shape[1],
+            atol=atol,
+        )
+    weighted_states_for_opeq = [
+        [
+            p_a_given_x[x, a] * states_for_prob[x, a, :]
+            for a in range(int(a_cardinality_per_x[x]))
+        ]
+        for x in range(states_for_prob.shape[0])
+    ]
 
-    data_table, measurement_indices = data_table_from_gpt_states_and_effect_set(
-        gpt_states=states,
+    measurement_effects, measurement_indices = infer_measurements_from_gpt_effect_set(
         gpt_effect_set=gpt_effect_set,
-        source_outcome_distribution=source_outcome_distribution,
         unit_effect=unit_effect,
         atol=atol,
         outcomes_per_measurement=outcomes_per_measurement,
+    )
+    data_table = probability_table_from_gpt_vectors(
+        gpt_states=gpt_states,
+        gpt_effects=measurement_effects,
+        source_outcome_distribution=source_outcome_distribution,
+        normalize_source_outcomes=True,
+        atol=atol,
         drop_tiny_imag=drop_tiny_imag,
     )
-    measurement_effects, _ = infer_measurements_from_gpt_effect_set(
-        gpt_effect_set=gpt_effect_set,
-        unit_effect=unit_effect,
-        atol=atol,
-        outcomes_per_measurement=outcomes_per_measurement,
-    )
+    b_cardinality_per_y = np.array([len(combo) for combo in measurement_indices], dtype=int)
+    measurement_effects_for_opeq = [
+        [measurement_effects[y, b, :] for b in range(int(b_cardinality_per_y[y]))]
+        for y in range(len(measurement_indices))
+    ]
 
-    opeq_preps = discover_operational_equivalences_from_gpt_objects(states_for_opeq, atol=atol)
-    opeq_meas = discover_operational_equivalences_from_gpt_objects(measurement_effects, atol=atol)
+    opeq_preps = discover_operational_equivalences_from_gpt_objects(weighted_states_for_opeq, atol=atol)
+    opeq_meas = discover_operational_equivalences_from_gpt_objects(measurement_effects_for_opeq, atol=atol)
 
     scenario = ContextualityScenario(
         data=data_table,
@@ -548,10 +605,12 @@ def _contains_sympy_entries(obj: object) -> bool:
         return True
     if isinstance(obj, sympy.Basic):
         return True
-    if isinstance(obj, np.ndarray) and obj.dtype == object:
-        return any(isinstance(entry, sympy.Basic) for entry in obj.reshape(-1))
+    if isinstance(obj, np.ndarray):
+        if obj.dtype != object:
+            return False
+        return any(_contains_sympy_entries(entry) for entry in obj.reshape(-1))
     if isinstance(obj, (list, tuple)):
-        return any(isinstance(entry, sympy.Basic) for entry in obj)
+        return any(_contains_sympy_entries(entry) for entry in obj)
     return False
 
 
@@ -594,59 +653,206 @@ def _sympy_real_if_close(value: object, atol: float) -> object:
     return expr
 
 
+def _coerce_distribution_rows(
+    source_outcome_distribution: object,
+    *,
+    num_x: int,
+) -> list[list[object]]:
+    arr = np.asarray(source_outcome_distribution, dtype=object)
+    if arr.ndim == 2:
+        if arr.shape[0] != num_x:
+            raise ValueError(f"source_outcome_distribution must have {num_x} rows.")
+        return [arr[x, :].tolist() for x in range(num_x)]
+
+    if not isinstance(source_outcome_distribution, (list, tuple, np.ndarray)):
+        raise ValueError("source_outcome_distribution must be a 2D array or nested list-like input.")
+    rows = list(source_outcome_distribution)
+    if len(rows) != num_x:
+        raise ValueError(f"source_outcome_distribution must have {num_x} rows.")
+
+    out: list[list[object]] = []
+    for x, row in enumerate(rows):
+        if isinstance(row, np.ndarray):
+            out.append(np.asarray(row, dtype=object).reshape(-1).tolist())
+            continue
+        if isinstance(row, (list, tuple)):
+            out.append(list(row))
+            continue
+        raise ValueError(f"source_outcome_distribution row {x} is not list-like.")
+    return out
+
+
+def _normalize_source_outcome_distribution_numeric(
+    source_outcome_distribution: object | None,
+    *,
+    a_cardinality_per_x: np.ndarray,
+    num_x: int,
+    a_max: int,
+    atol: float,
+) -> np.ndarray:
+    counts = np.asarray(a_cardinality_per_x, dtype=int).reshape(-1)
+    if counts.shape != (num_x,):
+        raise ValueError(f"a_cardinality_per_x must have shape ({num_x},).")
+
+    p_a_given_x = np.zeros((num_x, a_max), dtype=float)
+    if source_outcome_distribution is None:
+        for x in range(num_x):
+            count = int(counts[x])
+            p_a_given_x[x, :count] = 1.0 / float(count)
+        return p_a_given_x
+
+    rows = _coerce_distribution_rows(source_outcome_distribution, num_x=num_x)
+    for x in range(num_x):
+        row = rows[x]
+        count = int(counts[x])
+        if len(row) not in {count, a_max}:
+            raise ValueError(
+                f"source_outcome_distribution row {x} must have length {count} "
+                f"(or padded length {a_max}), got {len(row)}."
+            )
+        row_arr = np.asarray(row, dtype=complex)
+        if row_arr.size and np.max(np.abs(np.imag(row_arr))) > float(atol):
+            raise ValueError("source_outcome_distribution contains significant imaginary entries.")
+        row_real = np.asarray(np.real(row_arr), dtype=float)
+
+        if len(row) == a_max and count < a_max:
+            padded_values = row_real[count:]
+            if padded_values.size and np.any(np.abs(padded_values) > float(atol)):
+                raise ValueError("source_outcome_distribution has nonzero padded entries.")
+
+        valid_values = row_real[:count]
+        if np.any(valid_values < -float(atol)):
+            raise ValueError("source_outcome_distribution contains negative entries.")
+        if not np.allclose(np.sum(valid_values), 1.0, atol=float(atol)):
+            raise ValueError("Each source_outcome_distribution[x,:] must sum to 1 on valid outcomes.")
+        p_a_given_x[x, :count] = np.clip(valid_values, 0.0, None)
+    return p_a_given_x
+
+
+def _normalize_source_outcome_distribution_symbolic(
+    source_outcome_distribution: object | None,
+    *,
+    a_cardinality_per_x: np.ndarray,
+    num_x: int,
+    a_max: int,
+    atol: float,
+) -> np.ndarray:
+    import sympy
+
+    counts = np.asarray(a_cardinality_per_x, dtype=int).reshape(-1)
+    if counts.shape != (num_x,):
+        raise ValueError(f"a_cardinality_per_x must have shape ({num_x},).")
+
+    p_a_given_x = np.empty((num_x, a_max), dtype=object)
+    p_a_given_x[:, :] = sympy.Integer(0)
+
+    if source_outcome_distribution is None:
+        for x in range(num_x):
+            count = int(counts[x])
+            uniform = sympy.Rational(1, count)
+            for a in range(count):
+                p_a_given_x[x, a] = uniform
+        return p_a_given_x
+
+    rows = _coerce_distribution_rows(source_outcome_distribution, num_x=num_x)
+    for x in range(num_x):
+        row = rows[x]
+        count = int(counts[x])
+        if len(row) not in {count, a_max}:
+            raise ValueError(
+                f"source_outcome_distribution row {x} must have length {count} "
+                f"(or padded length {a_max}), got {len(row)}."
+            )
+
+        row_sum = sympy.Integer(0)
+        for a in range(count):
+            value = _sympy_real_if_close(row[a], atol=atol)
+            numeric_value = _sympy_numeric_complex(value)
+            if numeric_value is not None:
+                if abs(numeric_value.imag) > float(atol):
+                    raise ValueError("source_outcome_distribution contains significant imaginary entries.")
+                if numeric_value.real < -float(atol):
+                    raise ValueError("source_outcome_distribution contains negative entries.")
+            p_a_given_x[x, a] = value
+            row_sum += value
+
+        if len(row) == a_max and count < a_max:
+            for a in range(count, a_max):
+                padded_value = _sympy_real_if_close(row[a], atol=atol)
+                padded_abs = _sympy_numeric_abs(padded_value)
+                if padded_abs is not None:
+                    if padded_abs > float(atol):
+                        raise ValueError("source_outcome_distribution has nonzero padded entries.")
+                elif sympy.simplify(padded_value).is_zero is not True:
+                    raise ValueError("source_outcome_distribution padded entries must be zero.")
+
+        row_gap = sympy.simplify(row_sum - 1)
+        row_gap_abs = _sympy_numeric_abs(row_gap)
+        if row_gap.is_zero is not True and (row_gap_abs is None or row_gap_abs > float(atol)):
+            raise ValueError("Each source_outcome_distribution[x,:] must sum to 1 on valid outcomes.")
+
+    return p_a_given_x
+
+
 def _probability_table_from_gpt_vectors_symbolic(
     gpt_states: np.ndarray,
     gpt_effects: np.ndarray,
     source_outcome_distribution: np.ndarray | None,
     normalize_source_outcomes: bool,
+    return_masked: bool | None,
     atol: float,
     drop_tiny_imag: bool,
-) -> np.ndarray:
+) -> np.ndarray | np.ma.MaskedArray:
     import sympy
 
-    states = _to_sympy_object_array(gpt_states)
-    effects = _to_sympy_object_array(gpt_effects)
+    states_raw, a_cardinality_per_x, valid_a_mask = normalize_grouped_vectors_settings_single_outcome(
+        gpt_states,
+        name="gpt_states",
+    )
+    effects_raw, _b_cardinality_per_y, valid_b_mask = normalize_grouped_vectors_settings_single_outcome(
+        gpt_effects,
+        name="gpt_effects",
+    )
+    states = _to_sympy_object_array(states_raw)
+    effects = _to_sympy_object_array(effects_raw)
     if states.ndim != 3:
-        raise ValueError("gpt_states must have shape (X, A, K).")
+        raise ValueError("gpt_states must have shape (X, A, K) or ragged equivalent.")
     if effects.ndim != 3:
-        raise ValueError("gpt_effects must have shape (Y, B, K).")
+        raise ValueError("gpt_effects must have shape (Y, B, K) or ragged equivalent.")
     if states.shape[-1] != effects.shape[-1]:
         raise ValueError("State/effect vector dimensions do not match.")
 
+    valid_ab_mask = valid_a_mask[:, np.newaxis, :, np.newaxis] & valid_b_mask[np.newaxis, :, np.newaxis, :]
     probs = np.einsum("xak,ybk->xyab", states, effects)
+    if np.any(~valid_ab_mask):
+        for idx in np.argwhere(~valid_ab_mask):
+            probs[tuple(idx.tolist())] = sympy.Integer(0)
     if normalize_source_outcomes:
         num_x, _, num_a, _ = probs.shape
-        if source_outcome_distribution is None:
-            p_a_given_x = np.empty((num_x, num_a), dtype=object)
-            p_a_given_x[:, :] = sympy.Rational(1, num_a)
-        else:
-            p_a_given_x = _to_sympy_object_array(source_outcome_distribution)
-            if p_a_given_x.shape != (num_x, num_a):
-                raise ValueError(f"source_outcome_distribution must have shape ({num_x}, {num_a}).")
-            for x in range(num_x):
-                row_sum = sympy.Integer(0)
-                for a in range(num_a):
-                    value = _sympy_real_if_close(p_a_given_x[x, a], atol=atol)
-                    numeric_value = _sympy_numeric_complex(value)
-                    if numeric_value is not None:
-                        if abs(numeric_value.imag) > float(atol):
-                            raise ValueError("source_outcome_distribution contains significant imaginary entries.")
-                        if numeric_value.real < -float(atol):
-                            raise ValueError("source_outcome_distribution contains negative entries.")
-                    p_a_given_x[x, a] = value
-                    row_sum += value
-                row_gap = sympy.simplify(row_sum - 1)
-                row_gap_abs = _sympy_numeric_abs(row_gap)
-                if row_gap.is_zero is not True and (row_gap_abs is None or row_gap_abs > float(atol)):
-                    raise ValueError("Each source_outcome_distribution[x,:] must sum to 1.")
+        p_a_given_x = _normalize_source_outcome_distribution_symbolic(
+            source_outcome_distribution=source_outcome_distribution,
+            a_cardinality_per_x=a_cardinality_per_x,
+            num_x=num_x,
+            a_max=num_a,
+            atol=atol,
+        )
         probs = probs * p_a_given_x[:, np.newaxis, :, np.newaxis]
 
     if drop_tiny_imag:
         probs_clean = np.empty(probs.shape, dtype=object)
         for idx, value in np.ndenumerate(probs):
             probs_clean[idx] = _sympy_real_if_close(value, atol=atol)
-        return probs_clean
-    return probs
+        out = probs_clean
+    else:
+        out = probs
+    auto_masked = (
+        not np.all(a_cardinality_per_x == a_cardinality_per_x[0])
+        or not np.all(_b_cardinality_per_y == _b_cardinality_per_y[0])
+    )
+    use_masked = auto_masked if return_masked is None else bool(return_masked)
+    if use_masked:
+        return np.ma.array(out, mask=~valid_ab_mask, copy=False)
+    return out
 
 
 def _discover_operational_equivalences_from_gpt_objects_symbolic(
@@ -655,11 +861,13 @@ def _discover_operational_equivalences_from_gpt_objects_symbolic(
 ) -> np.ndarray:
     import sympy
 
-    raw = _to_sympy_object_array(gpt_objects)
-    if raw.ndim == 2:
-        raw = raw[np.newaxis, ...]
+    raw_grouped, _counts, valid_mask = normalize_grouped_vectors_single_setting_many_outcomes(
+        gpt_objects,
+        name="gpt_objects",
+    )
+    raw = _to_sympy_object_array(raw_grouped)
     if raw.ndim != 3:
-        raise ValueError("gpt_objects must have shape (O,K) or (S,O,K).")
+        raise ValueError("gpt_objects must have shape (O,K)/(S,O,K) or ragged equivalent.")
 
     objects = np.empty(raw.shape, dtype=object)
     for idx, value in np.ndenumerate(raw):
@@ -671,9 +879,20 @@ def _discover_operational_equivalences_from_gpt_objects_symbolic(
         objects[idx] = sympy.simplify(sympy.re(cleaned))
 
     num_s, num_o, vec_dim = objects.shape
-    matrix = objects.reshape(num_s * num_o, vec_dim)
-    basis = null_space_basis(matrix.T, atol=atol, method="sympy")
-    return basis.reshape(-1, num_s, num_o)
+    matrix_full = objects.reshape(num_s * num_o, vec_dim)
+    valid_indices = flatten_valid_indices(valid_mask)
+    matrix = matrix_full[valid_indices, :]
+    basis_reduced = null_space_basis(matrix.T, atol=atol, method="sympy")
+    basis_full = embed_basis_rows_to_padded(
+        basis_reduced,
+        valid_flat_indices=valid_indices,
+        total_size=num_s * num_o,
+    )
+    basis = basis_full.reshape(-1, num_s, num_o)
+    if np.any(~valid_mask):
+        for idx in np.argwhere(~valid_mask):
+            basis[:, idx[0], idx[1]] = sympy.Integer(0)
+    return basis
 
 
 def _projector_from_ket_numpy(ket: object, drop_tiny_imag: bool = True) -> np.ndarray:

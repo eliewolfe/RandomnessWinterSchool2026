@@ -62,7 +62,7 @@ def _print_guessing_probability_grids(
     measurement_indices: list[tuple[int, ...]],
     precision: int = 3,
     include_keyrate_pairs: bool = True,
-    keyrate_threshold: float = 0.1,
+    keyrate_threshold: float = 0.001,
     guess_who: str = "Bob",
 ) -> None:
     target = scenario._normalize_guess_who(guess_who)
@@ -110,13 +110,33 @@ def _print_guessing_probability_grids(
                 )
 
 
-def _print_manual_target_robustness(scenario: ContextualityScenario, example_label: str) -> None:
-    robustness = contextuality_robustness_to_dephasing(scenario)
-    cfrac = contextual_fraction(scenario)
-    print(f"\nContextuality robustness to dephasing ({example_label}):")
-    print(f"r* = {_format_decimal(robustness, decimals=3)}")
-    print(f"contextual fraction = {_format_decimal(cfrac, decimals=3)}")
-    print("Interpretation: larger r* means more contextual (more dephasing needed to classicalize).")
+def _print_contextuality_measures(
+    scenario: ContextualityScenario,
+    metrics: list[str] | tuple[str, ...] | None = None,
+) -> None:
+    metric_list = ["dephasing_robustness", "contextual_fraction"] if metrics is None else list(metrics)
+
+    def _canonical_metric(metric: str) -> str:
+        token = str(metric).strip().lower().replace(" ", "_").replace("-", "_")
+        token = "_".join(part for part in token.split("_") if part)
+        aliases = {
+            "dephasing_robustness": "dephasing_robustness",
+            "robustness_to_dephasing": "dephasing_robustness",
+            "contextual_fraction": "contextual_fraction",
+        }
+        if token not in aliases:
+            raise ValueError(f"Unknown contextuality metric: {metric}")
+        return aliases[token]
+
+    canonical_metrics = [_canonical_metric(metric) for metric in metric_list]
+    print("\nMeasures of Contextuality (closer to 1 means more contextual):")
+    for metric in canonical_metrics:
+        if metric == "dephasing_robustness":
+            value = contextuality_robustness_to_dephasing(scenario)
+            print(f"dephasing robustness = {_format_decimal(value, decimals=3)}")
+        elif metric == "contextual_fraction":
+            value = contextual_fraction(scenario)
+            print(f"contextual fraction = {_format_decimal(value, decimals=3)}")
 
 
 def _print_measurement_index_sets(measurement_indices: list[tuple[int, ...]]) -> None:
@@ -152,22 +172,6 @@ def _group_gpt_vectors(
     )
 
 
-def _build_manual_scenario_from_grouped_gpt(
-    gpt_states_grouped: np.ndarray,
-    gpt_effects_grouped: np.ndarray,
-    verbose: bool = False,
-) -> ContextualityScenario:
-    data_symbolic = probability_table_from_gpt_vectors(gpt_states_grouped, gpt_effects_grouped)
-    opeq_preps_symbolic = discover_operational_equivalences_from_gpt_objects(gpt_states_grouped)
-    opeq_meas_symbolic = discover_operational_equivalences_from_gpt_objects(gpt_effects_grouped)
-    return ContextualityScenario(
-        data=data_symbolic,
-        opeq_preps=opeq_preps_symbolic,
-        opeq_meas=opeq_meas_symbolic,
-        verbose=verbose,
-    )
-
-
 def main() -> None:
     np.set_printoptions(precision=6, suppress=True)
 
@@ -199,9 +203,9 @@ def main() -> None:
         gpt_effect_set_example_1,
         measurement_indices_example_1,
     )
-    scenario_example_1 = _build_manual_scenario_from_grouped_gpt(
-        gpt_states_grouped_example_1,
-        gpt_effects_grouped_example_1,
+    scenario_example_1 = ContextualityScenario(
+        data=probability_table_from_gpt_vectors(gpt_states_grouped_example_1, gpt_effects_grouped_example_1),
+        opeq_meas=discover_operational_equivalences_from_gpt_objects(gpt_effects_grouped_example_1),
         verbose=False,
     )
     _print_preparation_index_sets(preparation_indices_example_1)
@@ -209,7 +213,6 @@ def main() -> None:
     _print_measurement_operational_equivalences(scenario_example_1)
     print("\nSymbolic probability table P(a,b|x,y):")
     scenario_example_1.print_probabilities(
-        as_p_b_given_x_y=False,
         precision=3,
         representation="symbolic",
     )
@@ -218,7 +221,7 @@ def main() -> None:
         measurement_indices_example_1,
         guess_who="Bob",
     )
-    _print_manual_target_robustness(scenario_example_1, "Example 1")
+    _print_contextuality_measures(scenario_example_1)
 
     # Example 2: +/- (X+Z), +/- (X-Z), with antipodal preparation clustering.
     _print_title("Example 2: (X+Z) and (X-Z) measurements")
@@ -237,9 +240,9 @@ def main() -> None:
         gpt_effect_set_example_2,
         measurement_indices_example_2,
     )
-    scenario_example_2 = _build_manual_scenario_from_grouped_gpt(
-        gpt_states_grouped_example_2,
-        gpt_effects_grouped_example_2,
+    scenario_example_2 = ContextualityScenario(
+        data=probability_table_from_gpt_vectors(gpt_states_grouped_example_2, gpt_effects_grouped_example_2),
+        opeq_meas=discover_operational_equivalences_from_gpt_objects(gpt_effects_grouped_example_2),
         verbose=False,
     )
     _print_preparation_index_sets(preparation_indices_example_2)
@@ -247,7 +250,6 @@ def main() -> None:
     _print_measurement_operational_equivalences(scenario_example_2)
     print("\nSymbolic probability table P(a,b|x,y):")
     scenario_example_2.print_probabilities(
-        as_p_b_given_x_y=False,
         precision=3,
         representation="symbolic",
     )
@@ -256,19 +258,28 @@ def main() -> None:
         measurement_indices_example_2,
         guess_who="Bob",
     )
-    _print_manual_target_robustness(scenario_example_2, "Example 2")
+    _print_contextuality_measures(scenario_example_2)
 
-    # Example 3: 6 hexagon preparations/effects in the X-Z plane, grouped into 3 settings of 2 outcomes.
+    # Example 3: 6 hexagon preparations/effects in the X-Z plane, with mixed outcome cardinalities.
     thetas = [sp.Integer(k) * sp.pi / 3 for k in range(6)]
     state_kets_example_3 = [_xz_plane_ket(theta) for theta in thetas]
     effect_kets_example_3 = list(state_kets_example_3)
+    povm_rescale = sp.Rational(2, 3)
 
     # Pair opposite vertices so each preparation setting averages to maximally mixed.
-    preparation_indices_example_3 = [(0, 3), (1, 4), (2, 5)]
-    measurement_indices_example_3 = [(0, 3), (1, 4), (2, 5)]
+    preparation_indices_example_3 = [(0, 3), (1, 4), (2, 5), (0, 2, 4), (1, 3, 5)]
+    measurement_indices_example_3 = [(0, 3), (1, 4), (2, 5), (6, 8, 10), (7, 9, 11)]
 
     gpt_state_set_example_3 = np.array([projector_hs_vector(ket) for ket in state_kets_example_3], dtype=object)
-    gpt_effect_set_example_3 = np.array([projector_hs_vector(ket) for ket in effect_kets_example_3], dtype=object)
+    gpt_effect_set_example_3_base = np.array([projector_hs_vector(ket) for ket in effect_kets_example_3], dtype=object)
+    gpt_effect_set_example_3_povm = np.array(
+        [povm_rescale * effect for effect in gpt_effect_set_example_3_base],
+        dtype=object,
+    )
+    gpt_effect_set_example_3 = np.concatenate(
+        [gpt_effect_set_example_3_base, gpt_effect_set_example_3_povm],
+        axis=0,
+    )
     gpt_states_grouped_example_3 = _group_gpt_vectors(
         gpt_state_set_example_3,
         preparation_indices_example_3,
@@ -277,10 +288,10 @@ def main() -> None:
         gpt_effect_set_example_3,
         measurement_indices_example_3,
     )
-    _print_title("Example 3: Hexagon states/effects in X-Z plane (|A|=2)")
-    scenario_example_3 = _build_manual_scenario_from_grouped_gpt(
-        gpt_states_grouped_example_3,
-        gpt_effects_grouped_example_3,
+    _print_title("Example 3: Hexagon states/effects with added 3-outcome POVMs")
+    scenario_example_3 = ContextualityScenario(
+        data=probability_table_from_gpt_vectors(gpt_states_grouped_example_3, gpt_effects_grouped_example_3),
+        opeq_meas=discover_operational_equivalences_from_gpt_objects(gpt_effects_grouped_example_3),
         verbose=False,
     )
     _print_preparation_index_sets(preparation_indices_example_3)
@@ -288,7 +299,6 @@ def main() -> None:
     _print_measurement_operational_equivalences(scenario_example_3)
     print("\nSymbolic probability table P(a,b|x,y):")
     scenario_example_3.print_probabilities(
-        as_p_b_given_x_y=False,
         precision=3,
         representation="symbolic",
     )
@@ -297,7 +307,7 @@ def main() -> None:
         measurement_indices_example_3,
         guess_who="Bob",
     )
-    _print_manual_target_robustness(scenario_example_3, "Example 3")
+    _print_contextuality_measures(scenario_example_3)
 
     # Example 4: Cabello-style 18-ray KS set in d=4, using GPT constructor directly.
     # 9 measurements, each with 4 outcomes; each effect appears in multiple measurements.
@@ -354,14 +364,14 @@ def main() -> None:
     )
 
     _print_title("Example 4: Cabello 18-ray KS set via GPT constructor (9 x 4 contexts)")
-    scenario_example_4 = _build_manual_scenario_from_grouped_gpt(
-        gpt_states_grouped_example_4,
-        gpt_effects_grouped_example_4,
+    scenario_example_4 = ContextualityScenario(
+        data=probability_table_from_gpt_vectors(gpt_states_grouped_example_4, gpt_effects_grouped_example_4),
+        opeq_meas=discover_operational_equivalences_from_gpt_objects(gpt_effects_grouped_example_4),
         verbose=False,
     )
     print(scenario_example_4)
     # print("\nData table P(a,b|x,y):")
-    # scenario_4.print_probabilities(as_p_b_given_x_y=False)
+    # scenario_4.print_probabilities()
     _print_preparation_index_sets(preparation_indices_example_4)
     _print_measurement_index_sets(measurement_indices_example_4)
     _print_measurement_operational_equivalences(scenario_example_4)
@@ -370,7 +380,7 @@ def main() -> None:
         measurement_indices_example_4,
         guess_who="Bob",
     )
-    _print_manual_target_robustness(scenario_example_4, "Example 4")
+    _print_contextuality_measures(scenario_example_4)
 
     # Example 5: Peres 24-ray construction restricted to 6 disjoint bases.
     # Grouping is by contiguous 4-ray blocks from the screenshot:
@@ -423,9 +433,9 @@ def main() -> None:
     )
 
     _print_title("Example 5: Peres 24 rays in 6 disjoint 4-ray bases")
-    scenario_example_5 = _build_manual_scenario_from_grouped_gpt(
-        gpt_states_grouped_example_5,
-        gpt_effects_grouped_example_5,
+    scenario_example_5 = ContextualityScenario(
+        data=probability_table_from_gpt_vectors(gpt_states_grouped_example_5, gpt_effects_grouped_example_5),
+        opeq_meas=discover_operational_equivalences_from_gpt_objects(gpt_effects_grouped_example_5),
         verbose=False,
     )
     print(scenario_example_5)
@@ -437,7 +447,7 @@ def main() -> None:
         measurement_indices_example_5,
         guess_who="Bob",
     )
-    _print_manual_target_robustness(scenario_example_5, "Example 5")
+    _print_contextuality_measures(scenario_example_5)
 
 
 if __name__ == "__main__":

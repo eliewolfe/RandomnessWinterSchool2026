@@ -60,7 +60,14 @@ def preparation_assignment_extremals(
         num_outcomes=scenario.A_cardinality,
         atol=tol,
     )
-    return rays_flat.reshape(-1, scenario.X_cardinality, scenario.A_cardinality)
+    rays = rays_flat.reshape(-1, scenario.X_cardinality, scenario.A_cardinality)
+    _assert_zero_on_invalid_support(
+        rays=rays,
+        valid_mask=scenario.valid_a_mask,
+        atol=tol,
+        label="preparation assignment extremals",
+    )
+    return rays
 
 
 def effect_assignment_extremals(
@@ -81,7 +88,14 @@ def effect_assignment_extremals(
         num_outcomes=scenario.B_cardinality,
         atol=tol,
     )
-    return rays_flat.reshape(-1, scenario.Y_cardinality, scenario.B_cardinality)
+    rays = rays_flat.reshape(-1, scenario.Y_cardinality, scenario.B_cardinality)
+    _assert_zero_on_invalid_support(
+        rays=rays,
+        valid_mask=scenario.valid_b_mask,
+        atol=tol,
+        label="effect assignment extremals",
+    )
+    return rays
 
 
 def assess_simplex_embeddability(
@@ -204,6 +218,24 @@ def _assignment_extremal_rays(
         method="numpy",
     )
     return enumerate_cone_extremal_rays(opeq_rows, atol=atol, method="cdd")
+
+
+def _assert_zero_on_invalid_support(
+    rays: np.ndarray,
+    valid_mask: np.ndarray,
+    atol: float,
+    label: str,
+) -> None:
+    """Sanity-check that extremal rays vanish on padded coordinates."""
+    arr = np.asarray(rays, dtype=float)
+    mask = np.asarray(valid_mask, dtype=bool)
+    if arr.ndim != 3:
+        raise ValueError(f"{label}: rays must have shape (N, S, O).")
+    if mask.shape != arr.shape[1:]:
+        raise ValueError(f"{label}: valid_mask shape mismatch.")
+    invalid = np.broadcast_to(~mask[np.newaxis, :, :], arr.shape)
+    if invalid.any() and np.any(np.abs(arr[invalid]) > float(atol)):
+        raise RuntimeError(f"{label} have nonzero entries on padded invalid coordinates.")
 
 
 def _solve_dephasing_robustness_lp(
