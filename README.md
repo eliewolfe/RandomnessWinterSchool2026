@@ -195,7 +195,7 @@ Notes:
 
 ### `contextuality.py`
 
-Contains simplex-embeddability and dephasing-robustness workflow.
+Contains simplex-embeddability workflow, dephasing-robustness, and contextual-fraction LPs.
 
 Main functions:
 
@@ -203,12 +203,19 @@ Main functions:
 - `effect_assignment_extremals(scenario)`
 - `assess_simplex_embeddability(scenario, ...)`
 - `contextuality_robustness_to_dephasing(scenario, ...)`
+- `assess_contextual_fraction(scenario, ...)`
+- `noncontextual_fraction(scenario, ...)`
+- `contextual_fraction(scenario, ...)`
 
 Result dataclass:
 
 - `SimplexEmbeddabilityResult` with:
   - `is_simplex_embeddable`
   - `dephasing_robustness`
+  - extremals, optional coupling weights, and solver status.
+- `ContextualFractionResult` with:
+  - `noncontextual_fraction`
+  - `contextual_fraction`
   - extremals, optional coupling weights, and solver status.
 
 ### `linalg_utils.py`
@@ -338,6 +345,26 @@ Interpretation used in demo:
 
 - larger `r*` means more contextuality (more dephasing needed to reach noncontextual explainability).
 - `r*` near 0 indicates simplex embeddability already (or nearly) present.
+
+## Contextual Fraction: High-Level Algorithm
+
+The contextual fraction workflow solves for the largest noncontextual subbehavior mass `lambda*`:
+
+- `S(a,b|x,y) = sum_ij w_ij R_ij(a,b|x,y)` where `R_ij` are prep/effect assignment-ray products and `w_ij >= 0`.
+- constraints:
+  - `S(a,b|x,y) <= P(a,b|x,y)` for all entries (subbehavior inequality),
+  - `sum_ab S(a,b|x,y) = lambda` for all `(x,y)` (uniform subnormalization mass).
+- objective: maximize `lambda`.
+
+Outputs:
+
+- `noncontextual_fraction = lambda*`
+- `contextual_fraction = 1 - lambda*`
+- post-solve sanity check verifies `lambda*` is within `[0, 1]` up to tolerance.
+
+Implementation note:
+
+- This is solved directly in the cone-weight representation; no explicit normalized-vertex enumeration is required.
 
 ## Demo Guide (`demo_randomness.py`, `demo_qkd.py`)
 

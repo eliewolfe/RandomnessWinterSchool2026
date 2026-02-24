@@ -7,10 +7,14 @@ from .randomness import (
     min_entropy,
 )
 from .contextuality import (
+    ContextualFractionResult,
     SimplexEmbeddabilityResult,
     assess_simplex_embeddability,
+    assess_contextual_fraction,
+    contextual_fraction,
     contextuality_robustness_to_dephasing,
     effect_assignment_extremals,
+    noncontextual_fraction,
     preparation_assignment_extremals,
 )
 from .linalg_utils import (
@@ -48,6 +52,9 @@ __all__ = [
     "contextuality_scenario_from_gpt",
     "contextuality_scenario_from_quantum",
     "assess_simplex_embeddability",
+    "assess_contextual_fraction",
+    "noncontextual_fraction",
+    "contextual_fraction",
     "contextuality_robustness_to_dephasing",
     "null_space_basis",
     "select_linearly_independent_rows",
@@ -59,6 +66,7 @@ __all__ = [
     "preparation_assignment_extremals",
     "effect_assignment_extremals",
     "SimplexEmbeddabilityResult",
+    "ContextualFractionResult",
     "analyze_scenario",
     "eve_optimal_average_guessing_probability",
     "eve_optimal_guessing_probability",

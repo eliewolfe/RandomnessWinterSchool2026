@@ -5,7 +5,10 @@ from __future__ import annotations
 import numpy as np
 import sympy as sp
 
-from randomness_contextuality_lp.contextuality import contextuality_robustness_to_dephasing
+from randomness_contextuality_lp.contextuality import (
+    contextual_fraction,
+    contextuality_robustness_to_dephasing,
+)
 from randomness_contextuality_lp.quantum import (
     discover_operational_equivalences_from_gpt_objects,
     projector_hs_vector,
@@ -85,8 +88,10 @@ def _print_guessing_probability_grids(
 
 def _print_manual_target_robustness(scenario: ContextualityScenario, example_label: str) -> None:
     robustness = contextuality_robustness_to_dephasing(scenario)
+    cfrac = contextual_fraction(scenario)
     print(f"\nContextuality robustness to dephasing ({example_label}):")
     print(f"r* = {_format_decimal(robustness, decimals=3)}")
+    print(f"contextual fraction = {_format_decimal(cfrac, decimals=3)}")
     print("Interpretation: larger r* means more contextual (more dephasing needed to classicalize).")
 
 
