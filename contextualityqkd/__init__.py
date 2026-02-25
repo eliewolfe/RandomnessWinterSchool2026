@@ -12,6 +12,7 @@ from .extremal_finders import (
     cone_v_to_h_mosek,
 )
 from .scenario import ContextualityScenario
+from .protocol import ContextualityProtocol
 from .quantum import (
     GPTContextualityScenario,
     QuantumContextualityScenario,
@@ -35,6 +36,7 @@ from .quantum import (
 
 __all__ = [
     "ContextualityScenario",
+    "ContextualityProtocol",
     "GPTContextualityScenario",
     "QuantumContextualityScenario",
     "null_space_basis",

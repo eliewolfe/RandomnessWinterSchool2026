@@ -432,27 +432,19 @@ def data_table_from_gpt_states_and_effect_set(
 
 
 class GPTContextualityScenario(ContextualityScenario):
-    """Contextuality scenario built directly from GPT primitives.
-
-    Construction always auto-discovers preparation/measurement OPEQ spaces from
-    the provided GPT objects. No manual OPEQ arrays are accepted in this path.
-    """
+    """Contextuality scenario built directly from GPT primitives with one state per x."""
 
     gpt_states_grouped: np.ndarray
     gpt_effects_grouped: np.ndarray
-    preparation_indices: tuple[tuple[int, ...], ...]
     measurement_indices: tuple[tuple[int, ...], ...]
-    source_outcome_distribution: object
 
     def __init__(
         self,
         gpt_states: object,
         gpt_effects: object,
         *,
-        preparation_indices: Sequence[Sequence[int]] | None = None,
         measurement_indices: Sequence[Sequence[int]] | None = None,
         infer_measurement_indices: bool = False,
-        source_outcome_distribution: object | None = None,
         unit_effect: np.ndarray | None = None,
         atol: float = 1e-9,
         outcomes_per_measurement: int | None = None,
@@ -464,12 +456,8 @@ class GPTContextualityScenario(ContextualityScenario):
                 "Provide measurement_indices or set infer_measurement_indices=True, not both."
             )
 
-        states_grouped, prep_indices_resolved = _resolve_grouped_gpt_vectors(
-            gpt_values=gpt_states,
-            grouped_indices=preparation_indices,
-            name="gpt_states",
-        )
-
+        states_flat = _coerce_flat_vector_set(gpt_states, name="gpt_states")
+        states_grouped = states_flat[:, np.newaxis, :]
         if measurement_indices is not None:
             effects_grouped, measurement_indices_resolved = _resolve_grouped_gpt_vectors(
                 gpt_values=gpt_effects,
@@ -494,7 +482,7 @@ class GPTContextualityScenario(ContextualityScenario):
                 name="gpt_effects",
             )
 
-        states_dense, a_cardinality_per_x, _ = normalize_grouped_vectors_settings_single_outcome(
+        states_dense, _state_counts, _ = normalize_grouped_vectors_settings_single_outcome(
             states_grouped,
             name="gpt_states",
         )
@@ -503,47 +491,27 @@ class GPTContextualityScenario(ContextualityScenario):
             name="gpt_effects",
         )
 
-        if _contains_sympy_entries(states_dense) or _contains_sympy_entries(source_outcome_distribution):
-            p_a_given_x = _normalize_source_outcome_distribution_symbolic(
-                source_outcome_distribution=source_outcome_distribution,
-                a_cardinality_per_x=a_cardinality_per_x,
-                num_x=states_dense.shape[0],
-                a_max=states_dense.shape[1],
-                atol=atol,
-            )
-        else:
-            p_a_given_x = _normalize_source_outcome_distribution_numeric(
-                source_outcome_distribution=source_outcome_distribution,
-                a_cardinality_per_x=a_cardinality_per_x,
-                num_x=states_dense.shape[0],
-                a_max=states_dense.shape[1],
-                atol=atol,
-            )
-
-        weighted_states_for_opeq = [
-            [
-                p_a_given_x[x, a] * states_dense[x, a, :]
-                for a in range(int(a_cardinality_per_x[x]))
-            ]
-            for x in range(states_dense.shape[0])
-        ]
-        effects_for_opeq = [
-            [effects_dense[y, b, :] for b in range(int(b_cardinality_per_y[y]))]
-            for y in range(effects_dense.shape[0])
-        ]
-
-        data_table = probability_table_from_gpt_vectors(
+        data_table_4d = probability_table_from_gpt_vectors(
             gpt_states=states_grouped,
             gpt_effects=effects_grouped,
-            source_outcome_distribution=source_outcome_distribution,
             normalize_source_outcomes=True,
             atol=atol,
             drop_tiny_imag=drop_tiny_imag,
         )
-        opeq_preps = discover_operational_equivalences_from_gpt_objects(
-            weighted_states_for_opeq,
+        data_dense_4d = np.asarray(np.ma.getdata(data_table_4d), dtype=object).copy()
+        if np.ma.isMaskedArray(data_table_4d):
+            data_dense_4d[np.asarray(np.ma.getmaskarray(data_table_4d), dtype=bool)] = 0
+        data_table = data_dense_4d[:, :, 0, :]
+
+        prep_opeqs_raw = discover_operational_equivalences_from_gpt_objects(
+            states_flat[:, np.newaxis, :],
             atol=atol,
         )
+        opeq_preps = np.asarray(prep_opeqs_raw, dtype=object).reshape(-1, states_flat.shape[0])
+        effects_for_opeq = [
+            [effects_dense[y, b, :] for b in range(int(b_cardinality_per_y[y]))]
+            for y in range(effects_dense.shape[0])
+        ]
         opeq_meas = discover_operational_equivalences_from_gpt_objects(
             effects_for_opeq,
             atol=atol,
@@ -557,11 +525,9 @@ class GPTContextualityScenario(ContextualityScenario):
             verbose=verbose,
         )
 
-        self.gpt_states_grouped = _grouped_vectors_from_dense(states_dense, a_cardinality_per_x)
+        self.gpt_states_grouped = np.array([[states_dense[x, 0, :]] for x in range(states_dense.shape[0])], dtype=object)
         self.gpt_effects_grouped = _grouped_vectors_from_dense(effects_dense, b_cardinality_per_y)
-        self.preparation_indices = prep_indices_resolved
         self.measurement_indices = measurement_indices_resolved
-        self.source_outcome_distribution = source_outcome_distribution
 
         if verbose and infer_measurement_indices:
             print("\nInferred measurement index sets:")
@@ -570,11 +536,7 @@ class GPTContextualityScenario(ContextualityScenario):
 
 
 class QuantumContextualityScenario(GPTContextualityScenario):
-    """Contextuality scenario built from quantum states/effects.
-
-    This constructor converts quantum matrices to GPT vectors and then delegates to
-    ``GPTContextualityScenario`` for data assembly and OPEQ discovery.
-    """
+    """Contextuality scenario built from quantum states/effects with one state per x."""
 
     quantum_states_grouped: tuple[tuple[np.ndarray, ...], ...]
     quantum_effects_grouped: tuple[tuple[np.ndarray, ...], ...]
@@ -587,10 +549,8 @@ class QuantumContextualityScenario(GPTContextualityScenario):
         quantum_states: object,
         quantum_effects: object,
         *,
-        preparation_indices: Sequence[Sequence[int]] | None = None,
         measurement_indices: Sequence[Sequence[int]] | None = None,
         infer_measurement_indices: bool = False,
-        source_outcome_distribution: object | None = None,
         basis: np.ndarray | None = None,
         unit_effect: np.ndarray | None = None,
         atol: float = 1e-9,
@@ -603,13 +563,8 @@ class QuantumContextualityScenario(GPTContextualityScenario):
                 "Provide measurement_indices or set infer_measurement_indices=True, not both."
             )
 
-        states_grouped_quantum, prep_indices_resolved = _resolve_grouped_quantum_matrices(
-            quantum_values=quantum_states,
-            grouped_indices=preparation_indices,
-            name="quantum_states",
-        )
-        states_flat_for_checks = _flatten_grouped_quantum_matrices(
-            states_grouped_quantum,
+        states_flat_quantum = _coerce_flat_matrix_set(
+            quantum_states,
             name="quantum_states",
         )
 
@@ -644,24 +599,20 @@ class QuantumContextualityScenario(GPTContextualityScenario):
             )
             quantum_effects_flat = None
 
-        if states_flat_for_checks.shape[-1] != effects_flat_for_checks.shape[-1]:
+        if states_flat_quantum.shape[-1] != effects_flat_for_checks.shape[-1]:
             raise ValueError("quantum_states and quantum_effects matrix dimensions must match.")
-        d = states_flat_for_checks.shape[-1]
-        # The projector HS-vector shortcut can produce complex GPT coordinates for
-        # genuinely complex quantum matrices (e.g., Y components). To keep GPT
-        # coordinates real-valued by default, only use the shortcut when both
-        # state/effect sets are effectively real.
+        d = states_flat_quantum.shape[-1]
         use_projector_fast_path = (
             basis is None
             and unit_effect is None
-            and np.max(np.abs(np.imag(states_flat_for_checks))) <= float(atol)
+            and np.max(np.abs(np.imag(states_flat_quantum))) <= float(atol)
             and np.max(np.abs(np.imag(effects_flat_for_checks))) <= float(atol)
-            and _all_projectors(states_flat_for_checks, atol=atol)
+            and _all_projectors(states_flat_quantum, atol=atol)
             and _all_projectors(effects_flat_for_checks, atol=atol)
         )
 
-        gpt_states_grouped = _convert_grouped_quantum_matrices_to_gpt(
-            grouped_quantum=states_grouped_quantum,
+        gpt_states_flat = _convert_flat_quantum_matrix_set_to_gpt(
+            flat_quantum=states_flat_quantum,
             basis=basis,
             drop_tiny_imag=drop_tiny_imag,
             use_projector_fast_path=use_projector_fast_path,
@@ -704,12 +655,10 @@ class QuantumContextualityScenario(GPTContextualityScenario):
             )
 
         super().__init__(
-            gpt_states=gpt_states_grouped,
+            gpt_states=gpt_states_flat,
             gpt_effects=gpt_effects_grouped,
-            preparation_indices=None,
             measurement_indices=None,
             infer_measurement_indices=False,
-            source_outcome_distribution=source_outcome_distribution,
             unit_effect=unit_effect_for_inference,
             atol=atol,
             outcomes_per_measurement=outcomes_per_measurement,
@@ -717,9 +666,8 @@ class QuantumContextualityScenario(GPTContextualityScenario):
             verbose=verbose,
         )
 
-        self.preparation_indices = prep_indices_resolved
         self.measurement_indices = measurement_indices_resolved
-        self.quantum_states_grouped = states_grouped_quantum
+        self.quantum_states_grouped = tuple((states_flat_quantum[x],) for x in range(states_flat_quantum.shape[0]))
         self.quantum_effects_grouped = effects_grouped_quantum
         self.basis_used = basis
         self.unit_effect_used = unit_effect_for_inference

@@ -1,9 +1,9 @@
-"""Native MOSEK LP routines for randomness quantification."""
+"""Bob-outcome LP backends and entropy helpers."""
 
 from __future__ import annotations
 
 import math
-from typing import Callable, Literal
+from typing import Sequence
 
 import mosek
 import numpy as np
@@ -11,35 +11,12 @@ import numpy as np
 from .scenario import ContextualityScenario
 
 
-GuessWho = Literal["Bob", "Alice", "Both"]
-ObjectiveLabelMap = Callable[[int, int, int, int], int | None]
-
-
-def _normalize_guess_who(guess_who: str | None) -> GuessWho:
-    """Normalize guess target selector to canonical capitalization."""
-    if guess_who is None:
-        return "Bob"
-
-    normalized = str(guess_who).strip().lower()
-    if normalized == "bob":
-        return "Bob"
-    if normalized == "alice":
-        return "Alice"
-    if normalized == "both":
-        return "Both"
-    raise ValueError("guess_who must be one of 'Bob', 'Alice', or 'Both' (case-insensitive).")
-
-
 def reverse_fano_bound(p_guess: float) -> float:
     """Return a lower bound on conditional Shannon entropy in bits from guessing probability."""
     p = float(p_guess)
     if p <= 0.0:
         raise ValueError("p_guess must be strictly positive.")
-    if p < 1.0:
-        p_eff = p
-    else:
-        p_eff = 1.0
-
+    p_eff = min(p, 1.0)
     f = math.floor(1 / p_eff)
     c = f + 1
     return (c * p_eff - 1) * f * math.log2(f) + (1 - f * p_eff) * c * math.log2(c)
@@ -47,7 +24,7 @@ def reverse_fano_bound(p_guess: float) -> float:
 
 def min_entropy(p_guess: float) -> float:
     """Return min-entropy in bits from guessing probability."""
-    return float(-math.log2(p_guess))
+    return float(-math.log2(float(p_guess)))
 
 
 def binary_entropy(probability: float, atol: float = 1e-12) -> float:
@@ -61,181 +38,31 @@ def binary_entropy(probability: float, atol: float = 1e-12) -> float:
     return float(-(p * math.log2(p) + (1.0 - p) * math.log2(1.0 - p)))
 
 
-def eve_optimal_guessing_probability(
+def _build_bob_single_model_lp_components(
     scenario: ContextualityScenario,
-    x: int = 0,
-    y: int = 0,
-    guess_who: str = "Bob",
-    objective_label_map: ObjectiveLabelMap | None = None,
-) -> float:
-    """Compute Eve's best guessing probability for one chosen target ``(x, y)``.
-
-    Motivation
-    ----------
-    This quantifies certified unpredictability for a specific preparation/measurement
-    choice. It is the targeted randomness metric to use when a protocol fixes one
-    setting pair.
-
-    How to use it with other functions
-    ----------------------------------
-    Build a ``ContextualityScenario`` first (directly, or via
-    ``GPTContextualityScenario`` / ``QuantumContextualityScenario``),
-    then call this function with the desired ``x`` and ``y``. Convert the result to
-    min-entropy with ``min_entropy`` if needed.
-
-    Input/output structure
-    ----------------------
-    Input is a validated ``ContextualityScenario`` and integer indices ``x`` and
-    ``y`` in range. Set ``guess_who`` to ``"Bob"``, ``"Alice"``, or ``"Both"``
-    (case-insensitive). Output is a single float in ``[0, 1]``: the LP optimum
-    for Eve's guessing probability at that target pair.
-
-    High-level implementation
-    -------------------------
-    Delegates to the shared LP builder/solver with a one-element target list,
-    enforcing data consistency and operational-equivalence constraints from the
-    scenario while maximizing Eve's success objective.
-    """
-    if x < 0 or x >= scenario.X_cardinality:
-        raise ValueError(f"x must be in 0..{scenario.X_cardinality - 1}.")
-    if y < 0 or y >= scenario.Y_cardinality:
-        raise ValueError(f"y must be in 0..{scenario.Y_cardinality - 1}.")
-
-    target = _normalize_guess_who(guess_who)
-    p_guess = _solve_guessing_lp_aggregate_objective(
-        scenario=scenario,
-        objective_terms=[(x, y, 1.0)],
-        guess_who=target,
-        objective_label_map=objective_label_map,
-    )
-    return float(p_guess)
-
-
-def eve_optimal_average_guessing_probability(
-    scenario: ContextualityScenario,
-    guess_who: str = "Bob",
-    objective_label_map: ObjectiveLabelMap | None = None,
-) -> float:
-    """Compute Eve's optimal guessing probability averaged over all ``(x, y)``.
-
-    Motivation
-    ----------
-    This provides a global, setting-agnostic randomness figure when no single target
-    pair is privileged.
-
-    How to use it with other functions
-    ----------------------------------
-    Use the same scenario objects produced by ``ContextualityScenario`` constructors.
-    Choose this function when you want one aggregate number; choose
-    ``eve_optimal_guessing_probability`` when targeting a specific pair.
-
-    Input/output structure
-    ----------------------
-    Input is one ``ContextualityScenario``. Set ``guess_who`` to ``"Bob"``,
-    ``"Alice"``, or ``"Both"`` (case-insensitive). Output is one float in
-    ``[0, 1]`` representing the LP optimum of the mean guessing objective over
-    all settings.
-
-    High-level implementation
-    -------------------------
-    Enumerates every ``(x, y)`` pair and solves one LP with an objective that
-    averages per-target success terms, reusing the same feasibility constraints as
-    the single-target optimization.
-    """
-    num_targets = float(scenario.X_cardinality * scenario.Y_cardinality)
-    objective_terms = [
-        (x, y, 1.0 / num_targets)
-        for x, y in np.ndindex(scenario.X_cardinality, scenario.Y_cardinality)
-    ]
-    target = _normalize_guess_who(guess_who)
-    p_guess = _solve_guessing_lp_aggregate_objective(
-        scenario=scenario,
-        objective_terms=objective_terms,
-        guess_who=target,
-        objective_label_map=objective_label_map,
-    )
-    return float(p_guess)
-
-
-def analyze_scenario(
-    scenario: ContextualityScenario,
-    guess_who: str = "Bob",
-    objective_label_map: ObjectiveLabelMap | None = None,
-) -> tuple[np.ndarray, np.ndarray]:
-    """Compute and cache Eve guessing and key-rate tables on ``scenario``.
-
-    Returns
-    -------
-    tuple
-        ``(p_guess_eve_table, keyrate_table)``, both with shape ``(X, Y)``.
-    """
-    target = _normalize_guess_who(guess_who)
-    num_x = scenario.X_cardinality
-    num_y = scenario.Y_cardinality
-
-    p_guess_eve_table = _solve_guessing_lp_hotstart_table(
-        scenario=scenario,
-        guess_who=target,
-        objective_label_map=objective_label_map,
-    )
-
-    if target == "Bob":
-        conditional_entropy_table = scenario.conditional_entropy_table_bob_given_alice
-    elif target == "Alice":
-        conditional_entropy_table = scenario.conditional_entropy_table_alice_given_bob
-    else:
-        conditional_entropy_table = scenario.conditional_entropy_table_alice_and_bob
-
-    keyrate_table = np.zeros_like(p_guess_eve_table)
-    for x, y in np.ndindex(num_x, num_y):
-        keyrate_table[x, y] = reverse_fano_bound(p_guess_eve_table[x, y]) - conditional_entropy_table[x, y]
-
-    return p_guess_eve_table, keyrate_table
-
-
-def _build_single_model_lp_components(
-    scenario: ContextualityScenario,
-    guess_who: GuessWho,
 ):
-    """Build shared single-model LP components used by sweep/single/average objectives."""
+    """Build shared single-model LP components for Bob-outcome Eve guessing."""
     data = scenario.data_numeric
     opeq_preps = scenario.opeq_preps_numeric
     opeq_meas = scenario.opeq_meas_numeric
     num_x = scenario.X_cardinality
     num_y = scenario.Y_cardinality
-    num_a = scenario.A_cardinality
     num_b = scenario.B_cardinality
-    a_cardinality_per_x = scenario.a_cardinality_per_x.astype(int, copy=False)
     b_cardinality_per_y = scenario.b_cardinality_per_y.astype(int, copy=False)
-    if guess_who == "Bob":
-        num_e = num_b
-    elif guess_who == "Alice":
-        num_e = num_a
-    elif guess_who == "Both":
-        num_e = num_a * num_b
-    else:
-        raise ValueError("Unsupported guess_who value.")
+    num_e = num_b
 
-    num_variables = num_x * num_y * num_a * num_b * num_e
-
-    def guess_event_index(a: int, b: int) -> int:
-        if guess_who == "Bob":
-            return int(b)
-        if guess_who == "Alice":
-            return int(a)
-        return int(a * num_b + b)
+    num_variables = num_x * num_y * num_b * num_e
 
     def var_index(
         x: int | np.ndarray,
         y: int | np.ndarray,
-        a: int | np.ndarray,
         b: int | np.ndarray,
         e: int | np.ndarray,
     ) -> int | np.ndarray:
-        x_arr, y_arr, a_arr, b_arr, e_arr = np.broadcast_arrays(x, y, a, b, e)
+        x_arr, y_arr, b_arr, e_arr = np.broadcast_arrays(x, y, b, e)
         idx = np.ravel_multi_index(
-            (x_arr, y_arr, a_arr, b_arr, e_arr),
-            dims=(num_x, num_y, num_a, num_b, num_e),
+            (x_arr, y_arr, b_arr, e_arr),
+            dims=(num_x, num_y, num_b, num_e),
         )
         if np.ndim(idx) == 0:
             return int(idx)
@@ -244,24 +71,24 @@ def _build_single_model_lp_components(
     rows_cols: list[list[int]] = []
     rows_vals: list[list[float]] = []
     rhs: list[float] = []
-    row_axis = slice(None), None
-    coeff_axis = None, slice(None)
 
     def append_var_zero_constraint(index: int) -> None:
         rows_cols.append([int(index)])
         rows_vals.append([1.0])
         rhs.append(0.0)
 
-    # Data consistency: sum_e P(a,b,e|x,y) = P_data(a,b|x,y)
+    # Data consistency: sum_e P_t(b,e|x,y) = p_data(b|x,y)
     e_values = np.arange(num_e, dtype=int)
     e_ones = np.ones(num_e, dtype=float)
-    for x, y, a, b in np.ndindex(num_x, num_y, num_a, num_b):
-        cols = var_index(x, y, a, b, e_values)
+    for x, y, b in np.ndindex(num_x, num_y, num_b):
+        cols = var_index(x, y, b, e_values)
         rows_cols.append(cols.tolist())
         rows_vals.append(e_ones.tolist())
-        rhs.append(float(data[x, y, a, b]))
+        rhs.append(float(data[x, y, b]))
 
-    # Preparation OPEQs: sum_{x,a} c[x,a] P(a,b,e|x,y) = 0
+    # Preparation OPEQs: sum_x c[x] P_t(b,e|x,y) = 0
+    row_axis = (slice(None), None)
+    coeff_axis = (None, slice(None))
     prep_row_shape = (num_y, num_b, num_e)
     prep_rows_per_opeq = int(np.prod(prep_row_shape))
     prep_y, prep_b, prep_e = np.unravel_index(
@@ -269,102 +96,58 @@ def _build_single_model_lp_components(
         prep_row_shape,
     )
     for coeffs in opeq_preps:
-        x_nonzero, a_nonzero = np.nonzero(coeffs)
-        coeff_nonzero = coeffs[x_nonzero, a_nonzero].astype(float)
+        x_nonzero = np.flatnonzero(np.asarray(coeffs, dtype=float))
+        coeff_nonzero = np.asarray(coeffs, dtype=float)[x_nonzero]
         if coeff_nonzero.size == 0:
             continue
 
         cols_matrix = var_index(
             x_nonzero[coeff_axis],
             prep_y[row_axis],
-            a_nonzero[coeff_axis],
             prep_b[row_axis],
             prep_e[row_axis],
         )
-        vals_matrix = np.broadcast_to(
-            coeff_nonzero[coeff_axis],
-            cols_matrix.shape,
-        )
+        vals_matrix = np.broadcast_to(coeff_nonzero[coeff_axis], cols_matrix.shape)
         rows_cols.extend(cols_matrix.tolist())
         rows_vals.extend(vals_matrix.tolist())
         rhs.extend([0.0] * prep_rows_per_opeq)
 
-    # Measurement OPEQs: sum_{y,b} d[y,b] P(a,b,e|x,y) = 0
-    meas_row_shape = (num_x, num_a, num_e)
+    # Measurement OPEQs: sum_{y,b} d[y,b] P_t(b,e|x,y) = 0
+    meas_row_shape = (num_x, num_e)
     meas_rows_per_opeq = int(np.prod(meas_row_shape))
-    meas_x, meas_a, meas_e = np.unravel_index(
-        np.arange(meas_rows_per_opeq, dtype=int),
-        meas_row_shape,
-    )
+    meas_x, meas_e = np.unravel_index(np.arange(meas_rows_per_opeq, dtype=int), meas_row_shape)
     for coeffs in opeq_meas:
-        y_nonzero, b_nonzero = np.nonzero(coeffs)
-        coeff_nonzero = coeffs[y_nonzero, b_nonzero].astype(float)
+        y_nonzero, b_nonzero = np.nonzero(np.asarray(coeffs, dtype=float))
+        coeff_nonzero = np.asarray(coeffs, dtype=float)[y_nonzero, b_nonzero]
         if coeff_nonzero.size == 0:
             continue
 
         cols_matrix = var_index(
             meas_x[row_axis],
             y_nonzero[coeff_axis],
-            meas_a[row_axis],
             b_nonzero[coeff_axis],
             meas_e[row_axis],
         )
-        vals_matrix = np.broadcast_to(
-            coeff_nonzero[coeff_axis],
-            cols_matrix.shape,
-        )
+        vals_matrix = np.broadcast_to(coeff_nonzero[coeff_axis], cols_matrix.shape)
         rows_cols.extend(cols_matrix.tolist())
         rows_vals.extend(vals_matrix.tolist())
         rhs.extend([0.0] * meas_rows_per_opeq)
 
-    # Enforce invalid guess labels to carry zero mass for each target setting pair.
-    if guess_who == "Bob":
-        for x, y in np.ndindex(num_x, num_y):
-            b_count = int(b_cardinality_per_y[y])
-            if b_count >= num_e:
-                continue
-            invalid_e = np.arange(b_count, num_e, dtype=int)
-            for a in range(int(a_cardinality_per_x[x])):
-                for b in range(b_count):
-                    cols = var_index(x, y, a, b, invalid_e)
-                    for idx in np.asarray(cols, dtype=int).tolist():
-                        append_var_zero_constraint(int(idx))
-    elif guess_who == "Alice":
-        for x, y in np.ndindex(num_x, num_y):
-            a_count = int(a_cardinality_per_x[x])
-            if a_count >= num_e:
-                continue
-            invalid_e = np.arange(a_count, num_e, dtype=int)
-            for a in range(a_count):
-                for b in range(int(b_cardinality_per_y[y])):
-                    cols = var_index(x, y, a, b, invalid_e)
-                    for idx in np.asarray(cols, dtype=int).tolist():
-                        append_var_zero_constraint(int(idx))
-    elif guess_who == "Both":
-        for x, y in np.ndindex(num_x, num_y):
-            a_count = int(a_cardinality_per_x[x])
-            b_count = int(b_cardinality_per_y[y])
-            invalid_e: list[int] = []
-            for e in range(num_e):
-                guess_a = int(e // num_b)
-                guess_b = int(e % num_b)
-                if guess_a >= a_count or guess_b >= b_count:
-                    invalid_e.append(e)
-            if not invalid_e:
-                continue
-            invalid_e_arr = np.asarray(invalid_e, dtype=int)
-            for a in range(a_count):
-                for b in range(b_count):
-                    cols = var_index(x, y, a, b, invalid_e_arr)
-                    for idx in np.asarray(cols, dtype=int).tolist():
-                        append_var_zero_constraint(int(idx))
+    # Enforce invalid guess labels to carry zero mass when B(y) < B_max.
+    for x, y in np.ndindex(num_x, num_y):
+        b_count = int(b_cardinality_per_y[y])
+        if b_count >= num_e:
+            continue
+        invalid_e = np.arange(b_count, num_e, dtype=int)
+        for b in range(b_count):
+            cols = var_index(x, y, b, invalid_e)
+            for idx in np.asarray(cols, dtype=int).tolist():
+                append_var_zero_constraint(int(idx))
 
     return (
         num_x,
         num_y,
-        num_a,
         num_b,
-        a_cardinality_per_x,
         b_cardinality_per_y,
         num_e,
         num_variables,
@@ -372,23 +155,18 @@ def _build_single_model_lp_components(
         rows_cols,
         rows_vals,
         rhs,
-        guess_event_index,
     )
 
 
-def _solve_guessing_lp_hotstart_table(
+def _solve_eve_guess_bob_by_y_lp_hotstart(
     scenario: ContextualityScenario,
-    target_pairs: list[tuple[int, int]] | None = None,
-    guess_who: GuessWho = "Bob",
-    objective_label_map: ObjectiveLabelMap | None = None,
+    where_key: Sequence[Sequence[int]],
 ) -> np.ndarray:
-    """Solve selected single-target Eve objectives by re-optimizing one primal simplex task."""
+    """Solve Eve LP for Bob guessing probability for each y under key-conditioning subsets."""
     (
         num_x,
         num_y,
-        num_a,
-        num_b,
-        a_cardinality_per_x,
+        _num_b,
         b_cardinality_per_y,
         _num_e,
         num_variables,
@@ -396,43 +174,36 @@ def _solve_guessing_lp_hotstart_table(
         rows_cols,
         rows_vals,
         rhs,
-        guess_event_index,
-    ) = _build_single_model_lp_components(
-        scenario=scenario,
-        guess_who=guess_who,
-    )
+    ) = _build_bob_single_model_lp_components(scenario=scenario)
 
-    if target_pairs is None:
-        target_pairs_list = list(np.ndindex(num_x, num_y))
-    else:
-        target_pairs_list = [(int(x), int(y)) for x, y in target_pairs]
-        for target_x, target_y in target_pairs_list:
-            if target_x < 0 or target_x >= num_x:
-                raise ValueError(f"x must be in 0..{num_x - 1}.")
-            if target_y < 0 or target_y >= num_y:
-                raise ValueError(f"y must be in 0..{num_y - 1}.")
+    if len(where_key) != num_y:
+        raise ValueError(f"where_key must have one row per y (expected {num_y}).")
 
-    objective_indices: dict[tuple[int, int], np.ndarray] = {}
-    for target_x, target_y in target_pairs_list:
-        idx_list: list[int] = []
-        for a in range(int(a_cardinality_per_x[target_x])):
-            for b in range(int(b_cardinality_per_y[target_y])):
-                if objective_label_map is None:
-                    guessed_e = guess_event_index(a, b)
-                else:
-                    label = objective_label_map(int(target_x), int(target_y), int(a), int(b))
-                    if label is None:
-                        continue
-                    guessed_e = int(label)
-                    if guessed_e < 0 or guessed_e >= _num_e:
-                        raise ValueError(
-                            f"objective_label_map returned out-of-range label {guessed_e}; "
-                            f"expected 0..{_num_e - 1}."
-                        )
-                idx_list.append(var_index(target_x, target_y, a, b, guessed_e))
-        objective_indices[(target_x, target_y)] = np.asarray(idx_list, dtype=int)
+    objective_data: dict[int, tuple[np.ndarray, np.ndarray]] = {}
+    for y, row in enumerate(where_key):
+        x_row = np.asarray(row, dtype=int).reshape(-1)
+        if x_row.size == 0:
+            objective_data[y] = (
+                np.empty((0,), dtype=int),
+                np.empty((0,), dtype=float),
+            )
+            continue
+        if np.any(x_row < 0) or np.any(x_row >= num_x):
+            raise ValueError(f"where_key[{y}] contains out-of-range x index.")
 
-    p_guess_table = np.full((num_x, num_y), np.nan, dtype=float)
+        weight = 1.0 / float(x_row.size)
+        coeffs: dict[int, float] = {}
+        b_count = int(b_cardinality_per_y[y])
+        for x in x_row.tolist():
+            for b in range(b_count):
+                idx = int(var_index(x, y, b, b))
+                coeffs[idx] = coeffs.get(idx, 0.0) + weight
+
+        idx = np.asarray(list(coeffs.keys()), dtype=int)
+        val = np.asarray([coeffs[int(i)] for i in idx.tolist()], dtype=float)
+        objective_data[y] = (idx, val)
+
+    out = np.full((num_y,), np.nan, dtype=float)
     with mosek.Env() as env:
         with env.Task(0, 0) as task:
             task.appendvars(num_variables)
@@ -450,106 +221,25 @@ def _solve_guessing_lp_hotstart_table(
             task.putobjsense(mosek.objsense.maximize)
 
             previous_idx: np.ndarray | None = None
-            for target_x, target_y in target_pairs_list:
+            for y in range(num_y):
                 if previous_idx is not None and previous_idx.size:
                     task.putclist(previous_idx.tolist(), [0.0] * int(previous_idx.size))
 
-                current_idx = objective_indices[(target_x, target_y)]
-                task.putclist(current_idx.tolist(), [1.0] * int(current_idx.size))
+                idx, val = objective_data[y]
+                if idx.size == 0:
+                    previous_idx = idx
+                    continue
+
+                task.putclist(idx.tolist(), val.tolist())
                 termination_code = task.optimize()
-                p_guess_table[target_x, target_y] = _get_optimal_primal_objective(
+                out[y] = _get_optimal_primal_objective(
                     task,
-                    failure_context=(
-                        f"single-target LP for (x={target_x}, y={target_y})"
-                    ),
+                    failure_context=(f"Bob-guessing LP for y={y}"),
                     termination_code=termination_code,
                 )
-                previous_idx = current_idx
-    return p_guess_table
+                previous_idx = idx
 
-
-def _solve_guessing_lp_aggregate_objective(
-    scenario: ContextualityScenario,
-    objective_terms: list[tuple[int, int, float]],
-    guess_who: GuessWho = "Bob",
-    objective_label_map: ObjectiveLabelMap | None = None,
-) -> float:
-    """Solve one LP with a weighted aggregate objective over target settings."""
-    (
-        num_x,
-        num_y,
-        num_a,
-        num_b,
-        a_cardinality_per_x,
-        b_cardinality_per_y,
-        _num_e,
-        num_variables,
-        var_index,
-        rows_cols,
-        rows_vals,
-        rhs,
-        guess_event_index,
-    ) = _build_single_model_lp_components(
-        scenario=scenario,
-        guess_who=guess_who,
-    )
-
-    if len(objective_terms) == 0:
-        raise ValueError("objective_terms must be non-empty.")
-
-    objective_coeffs: dict[int, float] = {}
-    for target_x, target_y, weight in objective_terms:
-        x = int(target_x)
-        y = int(target_y)
-        w = float(weight)
-        if x < 0 or x >= num_x:
-            raise ValueError(f"x must be in 0..{num_x - 1}.")
-        if y < 0 or y >= num_y:
-            raise ValueError(f"y must be in 0..{num_y - 1}.")
-        for a in range(int(a_cardinality_per_x[x])):
-            for b in range(int(b_cardinality_per_y[y])):
-                if objective_label_map is None:
-                    guessed_e = guess_event_index(a, b)
-                else:
-                    label = objective_label_map(int(x), int(y), int(a), int(b))
-                    if label is None:
-                        continue
-                    guessed_e = int(label)
-                    if guessed_e < 0 or guessed_e >= _num_e:
-                        raise ValueError(
-                            f"objective_label_map returned out-of-range label {guessed_e}; "
-                            f"expected 0..{_num_e - 1}."
-                        )
-                idx = int(var_index(x, y, a, b, guessed_e))
-                objective_coeffs[idx] = objective_coeffs.get(idx, 0.0) + w
-
-    with mosek.Env() as env:
-        with env.Task(0, 0) as task:
-            task.appendvars(num_variables)
-            task.putvarboundsliceconst(0, num_variables, mosek.boundkey.lo, 0.0, 0.0)
-
-            num_constraints = len(rows_cols)
-            task.appendcons(num_constraints)
-            for row_index in range(num_constraints):
-                task.putarow(row_index, rows_cols[row_index], rows_vals[row_index])
-                row_rhs = rhs[row_index]
-                task.putconbound(row_index, mosek.boundkey.fx, row_rhs, row_rhs)
-
-            if objective_coeffs:
-                obj_idx = list(objective_coeffs.keys())
-                obj_val = [float(objective_coeffs[idx]) for idx in obj_idx]
-                task.putclist(obj_idx, obj_val)
-
-            task.putintparam(mosek.iparam.optimizer, mosek.optimizertype.primal_simplex)
-            task.putobjsense(mosek.objsense.maximize)
-            termination_code = task.optimize()
-            return _get_optimal_primal_objective(
-                task,
-                failure_context=(
-                    f"aggregate-objective LP (num_terms={len(objective_terms)})"
-                ),
-                termination_code=termination_code,
-            )
+    return out
 
 
 def _get_optimal_primal_objective(

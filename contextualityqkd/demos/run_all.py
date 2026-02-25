@@ -15,14 +15,7 @@ import importlib
 
 
 DEMO_MODULES = [
-    "contextualityqkd.demos.randomness_qubit_z_x_xplusz",
-    "contextualityqkd.demos.randomness_qubit_xplusz_xminusz",
-    "contextualityqkd.demos.randomness_hexagon_povm",
-    "contextualityqkd.demos.randomness_cabello_18ray",
-    "contextualityqkd.demos.randomness_peres_24ray",
-    "contextualityqkd.demos.qkd_qubit_z_x_xplusz",
-    "contextualityqkd.demos.qkd_qubit_xplusz_xminusz",
-    "contextualityqkd.demos.qkd_hexagon_povm",
+    "contextualityqkd.demos.qkd_hexagon_projective",
     "contextualityqkd.demos.qkd_cabello_18ray",
     "contextualityqkd.demos.qkd_peres_24ray",
     "contextualityqkd.demos.qkd_porac_3_2",

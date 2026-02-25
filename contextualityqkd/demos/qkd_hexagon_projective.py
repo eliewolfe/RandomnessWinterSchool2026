@@ -1,4 +1,4 @@
-"""QKD protocol demo: Cabello 18-ray Kochen-Specker construction."""
+"""QKD protocol demo: hexagon states with projective measurements only."""
 
 from __future__ import annotations
 
@@ -12,61 +12,26 @@ if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
 import numpy as np
+import sympy as sp
 
 from contextualityqkd.protocol import ContextualityProtocol
 from contextualityqkd.quantum import (
     GPTContextualityScenario,
-    normalize_integer_rays_symbolic,
     projector_hs_vector,
+    xz_plane_ket,
 )
 from contextualityqkd.scenario import ContextualityScenario
 
 
 def main() -> None:
     np.set_printoptions(precision=6, suppress=True)
-    ContextualityScenario.print_title("QKD Protocol: Cabello 18-ray KS set")
+    ContextualityScenario.print_title("QKD Protocol: Hexagon projective measurements")
 
-    labels = list("123456789ABCDEFGHI")
-    rays = np.array(
-        [
-            [1, 0, 0, 0],
-            [0, 1, 0, 0],
-            [0, 0, 1, 0],
-            [1, 1, 1, 1],
-            [1, -1, 1, -1],
-            [1, -1, -1, 1],
-            [1, -1, -1, -1],
-            [1, -1, 1, 1],
-            [1, 1, 1, -1],
-            [1, 1, 0, 0],
-            [0, 0, 1, 1],
-            [0, 0, 1, -1],
-            [0, 1, 0, 1],
-            [0, 1, 0, -1],
-            [1, 0, -1, 0],
-            [1, 0, 0, -1],
-            [1, 0, 0, 1],
-            [0, 1, -1, 0],
-        ],
-        dtype=int,
-    )
-    contexts = [
-        "12BC",
-        "13DE",
-        "23GH",
-        "45EF",
-        "46GI",
-        "56AB",
-        "78AC",
-        "79HI",
-        "89DF",
-    ]
+    thetas = [sp.Integer(k) * sp.pi / 3 for k in range(6)]
+    state_kets = [xz_plane_ket(theta) for theta in thetas]
+    gpt_set = np.array([projector_hs_vector(ket) for ket in state_kets], dtype=object)
 
-    kets = normalize_integer_rays_symbolic(rays)
-    gpt_set = np.array([projector_hs_vector(ket) for ket in kets], dtype=object)
-
-    label_to_index = {lab: i for i, lab in enumerate(labels)}
-    measurement_indices = [tuple(label_to_index[ch] for ch in context) for context in contexts]
+    measurement_indices = [(0, 3), (1, 4), (2, 5)]
 
     scenario = GPTContextualityScenario(
         gpt_states=gpt_set,
@@ -74,10 +39,7 @@ def main() -> None:
         measurement_indices=measurement_indices,
         verbose=False,
     )
-    protocol = ContextualityProtocol(
-        scenario,
-        where_key=measurement_indices,
-    )
+    protocol = ContextualityProtocol(scenario, where_key=measurement_indices)
 
     scenario.print_preparation_index_sets(tuple((x,) for x in range(scenario.X_cardinality)))
     scenario.print_measurement_index_sets(scenario.measurement_indices)

@@ -1,8 +1,4 @@
-"""Pedagogical QKD demo: Peres 24-ray construction with 6 disjoint bases.
-
-Recommended execution:
-    python -m contextualityqkd.demos.qkd_peres_24ray
-"""
+"""QKD protocol demo: Peres 24-ray construction with 6 disjoint bases."""
 
 from __future__ import annotations
 
@@ -17,6 +13,7 @@ if str(_REPO_ROOT) not in sys.path:
 
 import numpy as np
 
+from contextualityqkd.protocol import ContextualityProtocol
 from contextualityqkd.quantum import (
     GPTContextualityScenario,
     normalize_integer_rays_symbolic,
@@ -27,11 +24,8 @@ from contextualityqkd.scenario import ContextualityScenario
 
 def main() -> None:
     np.set_printoptions(precision=6, suppress=True)
-    ContextualityScenario.print_title("QKD: Peres 24 rays in 6 disjoint 4-ray bases")
+    ContextualityScenario.print_title("QKD Protocol: Peres 24 rays in 6 disjoint 4-ray bases")
 
-    # ---------------------------------------------------------------------
-    # 1) Define Peres's 24 rays as integer representatives in R^4.
-    # ---------------------------------------------------------------------
     rays = np.array(
         [
             [2, 0, 0, 0],
@@ -62,44 +56,30 @@ def main() -> None:
         dtype=int,
     )
 
-    # ---------------------------------------------------------------------
-    # 2) Normalize rays, vectorize projectors, and choose 6 disjoint contexts.
-    # ---------------------------------------------------------------------
     kets = normalize_integer_rays_symbolic(rays)
     gpt_set = np.array([projector_hs_vector(ket) for ket in kets], dtype=object)
 
-    preparation_indices = [tuple(range(4 * x, 4 * (x + 1))) for x in range(6)]
-    measurement_indices = list(preparation_indices)
+    measurement_indices = [tuple(range(4 * y, 4 * (y + 1))) for y in range(6)]
 
-    print("\nProvided preparation index sets:")
-    for x, idx in enumerate(preparation_indices):
-        print(f"x={x}: preparations {tuple(idx)}")
-    print("\nProvided measurement index sets:")
-    for y, idx in enumerate(measurement_indices):
-        print(f"y={y}: effects {tuple(idx)}")
-
-    # ---------------------------------------------------------------------
-    # 3) Build scenario directly from GPT primitives.
-    # ---------------------------------------------------------------------
     scenario = GPTContextualityScenario(
         gpt_states=gpt_set,
         gpt_effects=gpt_set,
-        preparation_indices=preparation_indices,
         measurement_indices=measurement_indices,
         verbose=False,
     )
+    protocol = ContextualityProtocol(scenario, where_key=measurement_indices)
 
-    # ---------------------------------------------------------------------
-    # 4) Print scenario content and results.
-    # ---------------------------------------------------------------------
-    scenario.print_measurement_operational_equivalences(precision=3, representation="symbolic")
-    print("\nSymbolic probability table P(a,b|x,y):")
-    scenario.print_probabilities(precision=3, representation="symbolic")
-    scenario.print_guessing_probability_grids(
-        guess_who="Bob",
-        precision=3,
-        include_keyrate_pairs=True,
-    )
+    scenario.print_preparation_index_sets(tuple((x,) for x in range(scenario.X_cardinality)))
+    scenario.print_measurement_index_sets(scenario.measurement_indices)
+    print("\nSymbolic probability table p(b|x,y):")
+    scenario.print_probabilities(as_p_b_given_x_y=True, precision=3, representation="symbolic")
+    scenario.print_operational_equivalences(precision=3, representation="symbolic")
+    protocol.print_alice_guessing_metrics()
+    protocol.print_alice_uncertainty_metrics()
+    protocol.print_eve_guessing_metrics_lp()
+    protocol.print_eve_uncertainty_metrics_reverse_fano_lp()
+    protocol.print_key_rate_summary_reverse_fano_lp()
+
     scenario.print_contextuality_measures(precision=3)
 
 
