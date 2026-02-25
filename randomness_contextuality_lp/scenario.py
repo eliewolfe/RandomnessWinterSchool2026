@@ -580,34 +580,38 @@ class ContextualityScenario:
         representation: Literal["numeric", "symbolic"] = "numeric",
     ) -> str:
         """Return a readable operational-equivalence string."""
-        prep_eqs = self._array_for_representation(
+        prep_eqs_repr = self._array_for_representation(
             representation=representation,
             numeric=self.opeq_preps_numeric,
             symbolic=self.opeq_preps_symbolic,
         )
-        meas_eqs = self._array_for_representation(
+        meas_eqs_repr = self._array_for_representation(
             representation=representation,
             numeric=self.opeq_meas_numeric,
             symbolic=self.opeq_meas_symbolic,
         )
 
         lines = ["Preparation OPEQs:"]
-        for k, eq in enumerate(prep_eqs):
-            eq_line = self._format_matrix_single_line(
-                eq,
+        prep_keep = self._nontrivial_opeq_indices(self.opeq_preps_numeric, kind="prep")
+        for k_display, k_source in enumerate(prep_keep):
+            eq_rows = self._trim_opeq_rows(prep_eqs_repr[k_source], kind="prep")
+            eq_line = self._format_ragged_matrix_single_line(
+                eq_rows,
                 precision=precision,
                 representation=representation,
             )
-            lines.append(f"k={k}: {eq_line}")
+            lines.append(f"k={k_display}: {eq_line}")
 
         lines.append("Measurement OPEQs:")
-        for k, eq in enumerate(meas_eqs):
-            eq_line = self._format_matrix_single_line(
-                eq,
+        meas_keep = self._nontrivial_opeq_indices(self.opeq_meas_numeric, kind="meas")
+        for k_display, k_source in enumerate(meas_keep):
+            eq_rows = self._trim_opeq_rows(meas_eqs_repr[k_source], kind="meas")
+            eq_line = self._format_ragged_matrix_single_line(
+                eq_rows,
                 precision=precision,
                 representation=representation,
             )
-            lines.append(f"k={k}: {eq_line}")
+            lines.append(f"k={k_display}: {eq_line}")
         return "\n".join(lines)
 
     def print_probabilities(
@@ -639,19 +643,21 @@ class ContextualityScenario:
         representation: Literal["numeric", "symbolic"] = "numeric",
     ) -> str:
         """Return a readable string for measurement operational equivalences only."""
-        meas_eqs = self._array_for_representation(
+        meas_eqs_repr = self._array_for_representation(
             representation=representation,
             numeric=self.opeq_meas_numeric,
             symbolic=self.opeq_meas_symbolic,
         )
         lines = ["Measurement OPEQs:"]
-        for k, eq in enumerate(meas_eqs):
-            eq_line = self._format_matrix_single_line(
-                eq,
+        meas_keep = self._nontrivial_opeq_indices(self.opeq_meas_numeric, kind="meas")
+        for k_display, k_source in enumerate(meas_keep):
+            eq_rows = self._trim_opeq_rows(meas_eqs_repr[k_source], kind="meas")
+            eq_line = self._format_ragged_matrix_single_line(
+                eq_rows,
                 precision=precision,
                 representation=representation,
             )
-            lines.append(f"k={k}: {eq_line}")
+            lines.append(f"k={k_display}: {eq_line}")
         return "\n".join(lines)
 
     def print_measurement_operational_equivalences(
@@ -816,6 +822,95 @@ class ContextualityScenario:
                 max_line_width=10_000,
             ).replace("\n", " ")
         return ContextualityScenario._format_symbolic_matrix_single_line(matrix, precision=precision)
+
+    def _nontrivial_opeq_indices(
+        self,
+        opeqs_numeric: np.ndarray,
+        *,
+        kind: Literal["prep", "meas"],
+    ) -> list[int]:
+        """Return indices of OPEQs with both positive and negative valid coefficients."""
+        arr = np.asarray(opeqs_numeric, dtype=float)
+        if arr.ndim == 2:
+            arr = arr[np.newaxis, :, :]
+        if arr.ndim != 3:
+            raise ValueError("opeqs_numeric must have 2D or 3D shape.")
+
+        keep: list[int] = []
+        for k in range(arr.shape[0]):
+            rows = self._trim_opeq_rows(arr[k], kind=kind)
+            if not rows:
+                continue
+            coeffs = np.asarray([entry for row in rows for entry in row], dtype=float)
+            if coeffs.size == 0:
+                continue
+            has_positive = bool(np.any(coeffs > self.atol))
+            has_negative = bool(np.any(coeffs < -self.atol))
+            if has_positive and has_negative:
+                keep.append(k)
+        return keep
+
+    def _trim_opeq_rows(
+        self,
+        eq_matrix: np.ndarray,
+        *,
+        kind: Literal["prep", "meas"],
+    ) -> list[list[object]]:
+        """Trim one padded OPEQ matrix to valid per-setting outcome lengths."""
+        eq = np.asarray(eq_matrix, dtype=object)
+        if eq.ndim != 2:
+            raise ValueError("eq_matrix must be 2D.")
+
+        if kind == "prep":
+            counts = self._a_cardinality_per_x
+            expected_settings = self.X_cardinality
+        elif kind == "meas":
+            counts = self._b_cardinality_per_y
+            expected_settings = self.Y_cardinality
+        else:
+            raise ValueError("kind must be 'prep' or 'meas'.")
+
+        if eq.shape[0] != expected_settings:
+            raise ValueError("eq_matrix has incompatible setting dimension.")
+
+        out: list[list[object]] = []
+        for setting in range(expected_settings):
+            count = int(counts[setting])
+            out.append([eq[setting, outcome] for outcome in range(count)])
+        return out
+
+    @staticmethod
+    def _format_ragged_matrix_single_line(
+        rows: list[list[object]],
+        *,
+        precision: int,
+        representation: Literal["numeric", "symbolic"],
+    ) -> str:
+        formatted_rows: list[str] = []
+        for row in rows:
+            if representation == "numeric":
+                entries = [
+                    ContextualityScenario._format_numeric_entry(entry, precision=precision)
+                    for entry in row
+                ]
+            else:
+                entries = [
+                    ContextualityScenario._format_symbolic_entry(entry, precision=precision)
+                    for entry in row
+                ]
+            formatted_rows.append("[" + ", ".join(entries) + "]")
+        return "[" + ", ".join(formatted_rows) + "]"
+
+    @staticmethod
+    def _format_numeric_entry(entry: object, precision: int) -> str:
+        value = float(entry)
+        rounded = round(value, precision)
+        if abs(rounded) < 10 ** (-precision):
+            rounded = 0.0
+        text = f"{rounded:.{precision}f}".rstrip("0").rstrip(".")
+        if text in {"", "-0"}:
+            return "0"
+        return text
 
     @staticmethod
     def _shannon_entropy(probabilities: np.ndarray, atol: float = 1e-9) -> float:
