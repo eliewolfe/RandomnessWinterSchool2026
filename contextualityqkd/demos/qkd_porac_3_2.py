@@ -1,4 +1,4 @@
-"""Pedagogical QKD demo: (3,2)-PORAC with custom Eve objective mapping.
+"""Pedagogical QKD demo: (3,2)-PORAC as one-setting/eight-outcome source.
 
 Recommended execution:
     python -m contextualityqkd.demos.qkd_porac_3_2
@@ -29,18 +29,18 @@ def _porac_index(x0: int, x1: int, x2: int) -> int:
     return int(4 * x0 + 2 * x1 + x2)
 
 
-def porac_bit(x: int, y: int) -> int:
-    """Return x_y (the y-th retained source bit for setting x)."""
+def porac_bit(a: int, y: int) -> int:
+    """Return a_y (the y-th bit of Alice outcome label a in {0,...,7})."""
     if y < 0 or y > 2:
         raise ValueError("y must be 0, 1, or 2.")
-    return int((int(x) >> (2 - int(y))) & 1)
+    return int((int(a) >> (2 - int(y))) & 1)
 
 
 def porac_objective_label_map(x: int, y: int, a: int, b: int) -> int:
-    """Map each event to Eve's target label e=x_y for PORAC."""
-    _ = a
+    """Map each event to Eve's target label e=a_y for PORAC."""
+    _ = x
     _ = b
-    return porac_bit(x, y)
+    return porac_bit(a, y)
 
 
 def _porac_article_prep_opeq_rows() -> sp.Matrix:
@@ -81,15 +81,17 @@ def _print_porac_article_prep_opeqs() -> None:
     rows = _porac_article_prep_opeq_rows()
     print(f"\nPreparation OPEQs according to the article ({rows.rows} rows):")
     for k in range(rows.rows):
-        row_entries = [ContextualityScenario._format_symbolic_entry(rows[k, x], precision=6) for x in range(rows.cols)]
-        ragged = "[" + ", ".join(f"[{entry}]" for entry in row_entries) + "]"
+        row_entries = [ContextualityScenario._format_symbolic_entry(rows[k, a], precision=6) for a in range(rows.cols)]
+        ragged = "[[" + ", ".join(row_entries) + "]]"
         print(f"k={k}: {ragged}")
 
 
 def _validate_porac_prep_opeq_subspace(scenario: ContextualityScenario) -> tuple[int, int, int]:
-    """Validate that discovered prep OPEQs span the same row-space as article PORAC constraints."""
+    """Validate that discovered prep OPEQs match article PORAC constraints over outcome labels."""
     article = _porac_article_prep_opeq_rows()
-    discovered = sp.Matrix(np.asarray(scenario.opeq_preps_symbolic, dtype=object).reshape(-1, scenario.X_cardinality))
+    if scenario.X_cardinality != 1:
+        raise ValueError("Expected X_cardinality=1 in one-setting PORAC demo.")
+    discovered = sp.Matrix(np.asarray(scenario.opeq_preps_symbolic, dtype=object).reshape(-1, scenario.A_cardinality))
     rank_article = int(article.rank())
     rank_discovered = int(discovered.rank())
     rank_stacked = int(sp.Matrix.vstack(article, discovered).rank())
@@ -103,14 +105,14 @@ def _validate_porac_prep_opeq_subspace(scenario: ContextualityScenario) -> tuple
 
 
 def build_porac_scenario(*, eta: float = 1.0) -> QuantumContextualityScenario:
-    """Construct the (3,2)-PORAC scenario using a canonical 3->1 RAC strategy.
+    """Construct one-setting/outcome-lifted (3,2)-PORAC from a canonical 3->1 RAC strategy.
 
     Model summary:
-    - 8 preparations (x in {0,...,7}, interpreted as bit triples x0x1x2)
+    - 1 preparation setting (x=0) with 8 outcomes (a in {0,...,7})
+      interpreted as bit triples a0a1a2
     - 3 binary measurements (y in {0,1,2})
-    - source outcome cardinality A=1 (singleton preparations)
     - Bob output b in {0,1}
-    - parity-oblivious preparation OPEQs explicitly imposed
+    - parity-oblivious preparation OPEQs induced across Alice outcomes
     """
     eta_f = float(eta)
     if eta_f < 0.0 or eta_f > 1.0:
@@ -125,17 +127,19 @@ def build_porac_scenario(*, eta: float = 1.0) -> QuantumContextualityScenario:
 
     # ---------------------------------------------------------------------
     # 1) Build 8 qubit states at cube corners:
-    #      rho_x = (I + r_x . sigma)/2
+    #      rho_a = (I + r_a . sigma)/2
     #    then apply optional isotropic depolarizing noise parameter eta.
+    #    Group all eight as outcomes of a single Alice setting x=0.
     # ---------------------------------------------------------------------
-    quantum_states_grouped: list[list[np.ndarray]] = []
-    for x0 in (0, 1):
-        for x1 in (0, 1):
-            for x2 in (0, 1):
-                r = np.array([(-1) ** x0, (-1) ** x1, (-1) ** x2], dtype=float) / np.sqrt(3.0)
+    single_setting_outcomes: list[np.ndarray] = []
+    for a0 in (0, 1):
+        for a1 in (0, 1):
+            for a2 in (0, 1):
+                r = np.array([(-1) ** a0, (-1) ** a1, (-1) ** a2], dtype=float) / np.sqrt(3.0)
                 rho = 0.5 * (identity + r[0] * sigma_x + r[1] * sigma_y + r[2] * sigma_z)
                 rho_eta = eta_f * rho + (1.0 - eta_f) * 0.5 * identity
-                quantum_states_grouped.append([rho_eta])
+                single_setting_outcomes.append(rho_eta)
+    quantum_states_grouped = [single_setting_outcomes]
 
     # ---------------------------------------------------------------------
     # 2) Bob's three binary measurements are Pauli X, Y, Z projective effects.
@@ -157,27 +161,47 @@ def build_porac_scenario(*, eta: float = 1.0) -> QuantumContextualityScenario:
 
 
 def porac_bob_success_probability(scenario: ContextualityScenario) -> float:
-    """Compute S_B^rac = average_{x,y} P(b=x_y|x,y)."""
+    """Compute S_B^rac = average_y sum_a P(a,b=a_y|x=0,y)."""
+    if scenario.X_cardinality != 1:
+        raise ValueError("Expected X_cardinality=1 in one-setting PORAC demo.")
     total = 0.0
-    count = 0
-    for x in range(scenario.X_cardinality):
-        for y in range(scenario.Y_cardinality):
-            total += float(scenario.data_numeric[x, y, 0, porac_bit(x, y)])
-            count += 1
-    return float(total / count)
+    for y in range(scenario.Y_cardinality):
+        for a in range(scenario.A_cardinality):
+            total += float(scenario.data_numeric[0, y, a, porac_bit(a, y)])
+    return float(total / scenario.Y_cardinality)
 
 
 def porac_keyrate_lower_bound(
     scenario: ContextualityScenario,
 ) -> tuple[float, float, float]:
-    """Return (S_B^rac, S_E^rac, r_lb) with r_lb=-log2(S_E^rac)-h2(S_B^rac)."""
-    s_b = porac_bob_success_probability(scenario)
-    s_e = scenario.compute_eve_average_guessing_probability(
-        guess_who="Bob",
+    """Return (h_b, h_e, r_lb) with h_b=h2(S_B^rac), h_e=-log2(S_E^rac), r_lb=h_e-h_b."""
+    s_b_prob = porac_bob_success_probability(scenario)
+    s_e_prob = scenario.compute_eve_average_guessing_probability(
+        guess_who="Alice",
         objective_label_map=porac_objective_label_map,
     )
-    r_lb = float(-np.log2(s_e) - ContextualityScenario.binary_entropy(s_b))
-    return float(s_b), float(s_e), float(r_lb)
+    h_b = float(ContextualityScenario.binary_entropy(s_b_prob))
+    h_e = float(-np.log2(s_e_prob))
+    r_lb = float(h_e - h_b)
+    return float(h_b), float(h_e), float(r_lb)
+
+
+def porac_native_bob_guessing_table_for_bit(scenario: ContextualityScenario) -> np.ndarray:
+    """Return Bob-optimal native table for guessing target bit a_y (rows: x, cols: y)."""
+    table = np.zeros((scenario.X_cardinality, scenario.Y_cardinality), dtype=float)
+    for x in range(scenario.X_cardinality):
+        a_count = int(scenario.a_cardinality_per_x[x])
+        for y in range(scenario.Y_cardinality):
+            b_count = int(scenario.b_cardinality_per_y[y])
+            p_guess = 0.0
+            for b in range(b_count):
+                masses = np.zeros(2, dtype=float)
+                for a in range(a_count):
+                    label = porac_objective_label_map(x, y, a, b)
+                    masses[int(label)] += float(scenario.data_numeric[x, y, a, b])
+                p_guess += float(np.max(masses))
+            table[x, y] = p_guess
+    return table
 
 
 def main() -> None:
@@ -187,11 +211,11 @@ def main() -> None:
     # Build the noiseless PORAC scenario.
     # ---------------------------------------------------------------------
     scenario = build_porac_scenario(eta=1.0)
-    ContextualityScenario.print_title("QKD: (3,2)-PORAC protocol (eta=1.000)")
-    scenario.print_preparation_index_sets([(x,) for x in range(8)])
+    ContextualityScenario.print_title("QKD: (3,2)-PORAC protocol, one-setting eight-outcome form (eta=1.000)")
+    scenario.print_preparation_index_sets([tuple(range(8))])
 
-    print("\nSymbolic probability table p(b|x,y):")
-    scenario.print_probabilities(as_p_b_given_x_y=True, precision=3, representation="symbolic")
+    print("\nSymbolic probability table P(a,b|x,y):")
+    scenario.print_probabilities(as_p_b_given_x_y=False, precision=3, representation="symbolic")
 
     print("\nOperational equivalences:")
     scenario.print_operational_equivalences(precision=3, representation="symbolic")
@@ -202,48 +226,39 @@ def main() -> None:
         f"rank(article)={rank_article}, rank(discovered)={rank_discovered}, rank(vstack)={rank_stacked}."
     )
 
-    print("\nPORAC Eve-target guessing objective (e = x_y):")
-    scenario.print_guessing_probability_grids(
-        guess_who="Bob",
-        precision=3,
-        include_keyrate_pairs=False,
+    print("\nPORAC Eve-target guessing objective (e = a_y, where a is a 3-bit label):")
+    eve_bit_table = scenario.compute_eve_guessing_table(
+        guess_who="Alice",
         objective_label_map=porac_objective_label_map,
     )
-
-    # Alternative workaround (not used here):
-    # One could build an auxiliary lifted table P_lift(a,b|x,y)=delta_{a,x_y} P(b|x,y)
-    # and then call familiar guess_who="Alice" routines. We prefer the direct objective
-    # map extension because it preserves the native PORAC semantics without an artificial A-lift.
-    s_b, s_e, r_lb = porac_keyrate_lower_bound(scenario)
-    print("\nPORAC key-rate components (Eq. 22):")
-    print(f"S_B^rac = {ContextualityScenario.format_numeric(s_b, precision=6)}")
-    print(f"S_E^rac = {ContextualityScenario.format_numeric(s_e, precision=6)}")
+    print("Eve optimal guessing table for target bit a_y (rows: x, columns: y):")
     print(
-        "r_lb = -log2(S_E^rac) - h2(S_B^rac) = "
-        f"{ContextualityScenario.format_numeric(r_lb, precision=6)}"
+        np.array2string(
+            eve_bit_table,
+            formatter={
+                "float_kind": lambda value: ContextualityScenario.format_numeric(value, precision=3)
+            },
+        )
+    )
+    print("\nNative Bob-optimal guessing table for target bit a_y (rows: x, columns: y):")
+    native_bit_table = porac_native_bob_guessing_table_for_bit(scenario)
+    print(
+        np.array2string(
+            native_bit_table,
+            formatter={
+                "float_kind": lambda value: ContextualityScenario.format_numeric(value, precision=3)
+            },
+        )
     )
 
-    print("\nDepolarizing-noise sweep:")
-    print("eta    S_B^rac   S_E^rac   r_lb")
-    threshold_eta = None
-    for eta in np.linspace(1.0, 0.6, 9):
-        scenario_eta = build_porac_scenario(eta=float(eta))
-        s_b_eta, s_e_eta, r_lb_eta = porac_keyrate_lower_bound(scenario_eta)
-        if threshold_eta is None and r_lb_eta > 0:
-            threshold_eta = float(eta)
-        print(
-            f"{ContextualityScenario.format_numeric(eta, precision=3):>5}  "
-            f"{ContextualityScenario.format_numeric(s_b_eta, precision=6):>8}  "
-            f"{ContextualityScenario.format_numeric(s_e_eta, precision=6):>8}  "
-            f"{ContextualityScenario.format_numeric(r_lb_eta, precision=6):>8}"
-        )
-    if threshold_eta is None:
-        print("No positive r_lb observed on this eta grid.")
-    else:
-        print(
-            "First eta on grid with positive r_lb: "
-            f"{ContextualityScenario.format_numeric(threshold_eta, precision=3)}"
-        )
+    h_b, h_e, r_lb = porac_keyrate_lower_bound(scenario)
+    print("\nPORAC key-rate components (Eq. 22):")
+    print(f"h_b = h2(S_B^rac) = {ContextualityScenario.format_numeric(h_b, precision=6)}")
+    print(f"h_e = -log2(S_E^rac) = {ContextualityScenario.format_numeric(h_e, precision=6)}")
+    print(
+        "r_lb = h_e - h_b = "
+        f"{ContextualityScenario.format_numeric(r_lb, precision=6)}"
+    )
 
 
 if __name__ == "__main__":
