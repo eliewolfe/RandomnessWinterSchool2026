@@ -1,22 +1,5 @@
 """Public package API for contextuality randomness tooling."""
 
-from .randomness import (
-    analyze_scenario,
-    eve_optimal_average_guessing_probability,
-    eve_optimal_guessing_probability,
-    min_entropy,
-)
-from .contextuality import (
-    ContextualFractionResult,
-    SimplexEmbeddabilityResult,
-    assess_simplex_embeddability,
-    assess_contextual_fraction,
-    contextual_fraction,
-    contextuality_robustness_to_dephasing,
-    effect_assignment_extremals,
-    noncontextual_fraction,
-    preparation_assignment_extremals,
-)
 from .linalg_utils import (
     enumerate_cone_extremal_rays,
     null_space_basis,
@@ -30,10 +13,10 @@ from .extremal_finders import (
 )
 from .scenario import ContextualityScenario
 from .quantum import (
+    GPTContextualityScenario,
+    QuantumContextualityScenario,
     convert_matrix_list_to_vector_list,
     convert_matrix_to_vector,
-    contextuality_scenario_from_gpt,
-    contextuality_scenario_from_quantum,
     data_table_from_gpt_states_and_effect_set,
     discover_operational_equivalences_from_gpt_objects,
     discover_operational_equivalences_from_quantum_states,
@@ -41,21 +24,19 @@ from .quantum import (
     gell_mann_matrices,
     infer_measurements_from_gpt_effect_set,
     maximally_mixed_vector,
+    normalize_integer_rays_symbolic,
     probability_table_from_gpt_vectors,
     probability_table_from_quantum_via_gpt,
+    group_gpt_vectors_by_indices,
     unit_effect_vector,
+    xz_plane_ket,
 )
 
 
 __all__ = [
     "ContextualityScenario",
-    "contextuality_scenario_from_gpt",
-    "contextuality_scenario_from_quantum",
-    "assess_simplex_embeddability",
-    "assess_contextual_fraction",
-    "noncontextual_fraction",
-    "contextual_fraction",
-    "contextuality_robustness_to_dephasing",
+    "GPTContextualityScenario",
+    "QuantumContextualityScenario",
     "null_space_basis",
     "select_linearly_independent_rows",
     "enumerate_cone_extremal_rays",
@@ -63,11 +44,19 @@ __all__ = [
     "cone_v_to_h_cdd",
     "cone_h_to_v_mosek",
     "cone_v_to_h_mosek",
-    "preparation_assignment_extremals",
-    "effect_assignment_extremals",
-    "SimplexEmbeddabilityResult",
-    "ContextualFractionResult",
-    "analyze_scenario",
-    "eve_optimal_average_guessing_probability",
-    "eve_optimal_guessing_probability",
+    "convert_matrix_list_to_vector_list",
+    "convert_matrix_to_vector",
+    "data_table_from_gpt_states_and_effect_set",
+    "discover_operational_equivalences_from_gpt_objects",
+    "discover_operational_equivalences_from_quantum_states",
+    "direct_probability_table_from_quantum",
+    "gell_mann_matrices",
+    "infer_measurements_from_gpt_effect_set",
+    "maximally_mixed_vector",
+    "normalize_integer_rays_symbolic",
+    "probability_table_from_gpt_vectors",
+    "probability_table_from_quantum_via_gpt",
+    "group_gpt_vectors_by_indices",
+    "unit_effect_vector",
+    "xz_plane_ket",
 ]

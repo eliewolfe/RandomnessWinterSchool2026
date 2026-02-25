@@ -18,8 +18,9 @@ dependencies = [
   "scipy",
   "pycddlib",
   "sympy",
+  "methodtools",
 ]
 
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["randomness_contextuality_lp*"]
+include = ["contextualityqkd*"]

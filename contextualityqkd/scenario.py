@@ -15,8 +15,9 @@ from __future__ import annotations
 
 import warnings
 from functools import cached_property
-from typing import Literal
+from typing import Callable, Literal
 
+from methodtools import lru_cache
 import numpy as np
 import sympy as sp
 
@@ -31,6 +32,7 @@ from .linalg_utils import null_space_basis
 
 
 GuessWho = Literal["Bob", "Alice", "Both"]
+ObjectiveLabelMap = Callable[[int, int, int, int], int | None]
 
 
 class ContextualityScenario:
@@ -46,8 +48,8 @@ class ContextualityScenario:
     How to use it with other functions
     ----------------------------------
     - Build it directly if you already have a data table and OPEQs.
-    - Prefer ``contextuality_scenario_from_gpt`` or
-      ``contextuality_scenario_from_quantum`` when starting from GPT vectors or
+    - Prefer ``GPTContextualityScenario`` or
+      ``QuantumContextualityScenario`` when starting from GPT vectors or
       density/effect matrices.
     - Pass the resulting object to
       ``eve_optimal_guessing_probability`` or
@@ -84,8 +86,6 @@ class ContextualityScenario:
     _valid_ab_mask: np.ndarray
     atol: float
     verbose: bool
-    _p_guess_eve_tables: dict[GuessWho, np.ndarray]
-    _keyrate_tables: dict[GuessWho, np.ndarray]
 
     def __init__(
         self,
@@ -114,9 +114,6 @@ class ContextualityScenario:
         self.X_cardinality, self.Y_cardinality, self.A_cardinality, self.B_cardinality = (
             self.data_symbolic.shape
         )
-        self._p_guess_eve_tables = {}
-        self._keyrate_tables = {}
-
         if opeq_preps is None:
             if self.verbose:
                 self._warn_verbose(
@@ -250,49 +247,313 @@ class ContextualityScenario:
             return "Both"
         raise ValueError("guess_who must be one of 'Bob', 'Alice', or 'Both' (case-insensitive).")
 
-    def p_guess_eve_table(self, guess_who: str = "Bob") -> np.ndarray | None:
-        """Return cached Eve guessing table for selected target, if available."""
-        target = self._normalize_guess_who(guess_who)
-        return self._p_guess_eve_tables.get(target, None)
+    @staticmethod
+    def _normalize_contextuality_metric_name(metric: str) -> str:
+        """Normalize contextuality metric labels used by print helpers."""
+        token = str(metric).strip().lower().replace(" ", "_").replace("-", "_")
+        token = "_".join(part for part in token.split("_") if part)
+        aliases = {
+            "dephasing_robustness": "dephasing_robustness",
+            "robustness_to_dephasing": "dephasing_robustness",
+            "contextual_fraction": "contextual_fraction",
+            "noncontextual_fraction": "noncontextual_fraction",
+        }
+        if token not in aliases:
+            raise ValueError(f"Unknown contextuality metric: {metric}")
+        return aliases[token]
 
-    def set_p_guess_eve_table(
+    @staticmethod
+    def print_title(title: str, width: int = 80) -> None:
+        """Print a section title with separator bars."""
+        width_int = int(width)
+        if width_int <= 0:
+            raise ValueError("width must be positive.")
+        print("\n" + "=" * width_int)
+        print(str(title))
+        print("=" * width_int)
+
+    @staticmethod
+    def format_numeric(value: object, precision: int = 3) -> str:
+        """Format one numeric entry using scenario-consistent rounding rules."""
+        return ContextualityScenario._format_numeric_entry(value, precision=int(precision))
+
+    @staticmethod
+    def binary_entropy(probability: float, atol: float = 1e-12) -> float:
+        """Return binary Shannon entropy ``h2(p)``."""
+        from .randomness import binary_entropy as _binary_entropy
+
+        return float(_binary_entropy(float(probability), atol=float(atol)))
+
+    @lru_cache(maxsize=None)
+    def _compute_eve_guessing_table_cached(self, guess_who: GuessWho) -> np.ndarray:
+        """Cached default Eve guessing table (no custom objective map)."""
+        from .randomness import _solve_guessing_lp_hotstart_table
+
+        return _solve_guessing_lp_hotstart_table(
+            scenario=self,
+            target_pairs=None,
+            guess_who=guess_who,
+            objective_label_map=None,
+        )
+
+    def compute_eve_guessing_table(
         self,
-        values: np.ndarray | None,
         guess_who: str = "Bob",
-    ) -> None:
-        """Store or clear cached Eve guessing table for selected target."""
+        target_pairs: list[tuple[int, int]] | tuple[tuple[int, int], ...] | None = None,
+        objective_label_map: ObjectiveLabelMap | None = None,
+    ) -> np.ndarray:
+        """Return Eve optimal guessing table for selected target."""
         target = self._normalize_guess_who(guess_who)
-        if values is None:
-            self._p_guess_eve_tables.pop(target, None)
-            return
+        if objective_label_map is None and target_pairs is None:
+            return np.asarray(self._compute_eve_guessing_table_cached(target), dtype=float).copy()
 
-        arr = np.asarray(values, dtype=float)
-        expected_shape = (self.X_cardinality, self.Y_cardinality)
-        if arr.shape != expected_shape:
-            raise ValueError(f"p_guess_eve_table must have shape {expected_shape}.")
-        self._p_guess_eve_tables[target] = arr
+        from .randomness import _solve_guessing_lp_hotstart_table
 
-    def keyrate_table(self, guess_who: str = "Bob") -> np.ndarray | None:
-        """Return cached key-rate table for selected target, if available."""
-        target = self._normalize_guess_who(guess_who)
-        return self._keyrate_tables.get(target, None)
+        target_pairs_list = None if target_pairs is None else [(int(x), int(y)) for x, y in target_pairs]
+        return _solve_guessing_lp_hotstart_table(
+            scenario=self,
+            target_pairs=target_pairs_list,
+            guess_who=target,
+            objective_label_map=objective_label_map,
+        )
 
-    def set_keyrate_table(
+    @lru_cache(maxsize=None)
+    def _compute_eve_average_guessing_probability_cached(self, guess_who: GuessWho) -> float:
+        """Cached mean Eve guessing probability for default objective."""
+        table = self._compute_eve_guessing_table_cached(guess_who)
+        return float(np.mean(table))
+
+    def compute_eve_average_guessing_probability(
         self,
-        values: np.ndarray | None,
         guess_who: str = "Bob",
-    ) -> None:
-        """Store or clear cached key-rate table for selected target."""
+        objective_label_map: ObjectiveLabelMap | None = None,
+    ) -> float:
+        """Return uniform average Eve guessing probability over all (x,y)."""
         target = self._normalize_guess_who(guess_who)
-        if values is None:
-            self._keyrate_tables.pop(target, None)
-            return
+        if objective_label_map is None:
+            return float(self._compute_eve_average_guessing_probability_cached(target))
+        table = self.compute_eve_guessing_table(
+            guess_who=target,
+            target_pairs=None,
+            objective_label_map=objective_label_map,
+        )
+        return float(np.mean(table))
 
-        arr = np.asarray(values, dtype=float)
-        expected_shape = (self.X_cardinality, self.Y_cardinality)
-        if arr.shape != expected_shape:
-            raise ValueError(f"keyrate_table must have shape {expected_shape}.")
-        self._keyrate_tables[target] = arr
+    @staticmethod
+    def _build_keyrate_table_from_guessing_and_entropy(
+        p_guess_eve_table: np.ndarray,
+        conditional_entropy_table: np.ndarray,
+    ) -> np.ndarray:
+        """Compute key-rate table from guessing and conditional-entropy tables."""
+        from .randomness import reverse_fano_bound
+
+        keyrate_table = np.zeros_like(p_guess_eve_table, dtype=float)
+        for x, y in np.ndindex(p_guess_eve_table.shape):
+            keyrate_table[x, y] = reverse_fano_bound(p_guess_eve_table[x, y]) - conditional_entropy_table[x, y]
+        return keyrate_table
+
+    @lru_cache(maxsize=None)
+    def _compute_keyrate_table_cached(self, guess_who: GuessWho) -> np.ndarray:
+        """Cached key-rate table for default objective."""
+        p_guess_eve_table = self._compute_eve_guessing_table_cached(guess_who)
+        if guess_who == "Bob":
+            conditional_entropy_table = self.conditional_entropy_table_bob_given_alice
+        elif guess_who == "Alice":
+            conditional_entropy_table = self.conditional_entropy_table_alice_given_bob
+        else:
+            conditional_entropy_table = self.conditional_entropy_table_alice_and_bob
+        return self._build_keyrate_table_from_guessing_and_entropy(
+            p_guess_eve_table=p_guess_eve_table,
+            conditional_entropy_table=conditional_entropy_table,
+        )
+
+    def compute_keyrate_table(
+        self,
+        guess_who: str = "Bob",
+        objective_label_map: ObjectiveLabelMap | None = None,
+    ) -> np.ndarray:
+        """Return key-rate table for selected target and objective mode."""
+        target = self._normalize_guess_who(guess_who)
+        if objective_label_map is None:
+            return np.asarray(self._compute_keyrate_table_cached(target), dtype=float).copy()
+
+        p_guess_eve_table = self.compute_eve_guessing_table(
+            guess_who=target,
+            target_pairs=None,
+            objective_label_map=objective_label_map,
+        )
+        if target == "Bob":
+            conditional_entropy_table = self.conditional_entropy_table_bob_given_alice
+        elif target == "Alice":
+            conditional_entropy_table = self.conditional_entropy_table_alice_given_bob
+        else:
+            conditional_entropy_table = self.conditional_entropy_table_alice_and_bob
+        return self._build_keyrate_table_from_guessing_and_entropy(
+            p_guess_eve_table=p_guess_eve_table,
+            conditional_entropy_table=conditional_entropy_table,
+        )
+
+    @lru_cache(maxsize=None)
+    def _compute_dephasing_robustness_cached(self, atol_value: float | None) -> float:
+        """Cached dephasing robustness with default dephasing target."""
+        from .contextuality import contextuality_robustness_to_dephasing
+
+        return float(contextuality_robustness_to_dephasing(self, dephasing_target=None, atol=atol_value))
+
+    def compute_dephasing_robustness(
+        self,
+        dephasing_target: np.ndarray | None = None,
+        atol: float | None = None,
+    ) -> float:
+        """Compute contextuality robustness to dephasing."""
+        if dephasing_target is None:
+            atol_key = None if atol is None else float(atol)
+            return float(self._compute_dephasing_robustness_cached(atol_key))
+
+        from .contextuality import contextuality_robustness_to_dephasing
+
+        return float(contextuality_robustness_to_dephasing(self, dephasing_target=dephasing_target, atol=atol))
+
+    @lru_cache(maxsize=None)
+    def _compute_contextual_fraction_cached(self, atol_value: float | None) -> float:
+        """Cached contextual fraction for the scenario."""
+        from .contextuality import contextual_fraction
+
+        return float(contextual_fraction(self, atol=atol_value))
+
+    def compute_contextual_fraction(self, atol: float | None = None) -> float:
+        """Compute contextual fraction."""
+        atol_key = None if atol is None else float(atol)
+        return float(self._compute_contextual_fraction_cached(atol_key))
+
+    @lru_cache(maxsize=None)
+    def _compute_noncontextual_fraction_cached(self, atol_value: float | None) -> float:
+        """Cached noncontextual fraction for the scenario."""
+        from .contextuality import noncontextual_fraction
+
+        return float(noncontextual_fraction(self, atol=atol_value))
+
+    def compute_noncontextual_fraction(self, atol: float | None = None) -> float:
+        """Compute noncontextual fraction."""
+        atol_key = None if atol is None else float(atol)
+        return float(self._compute_noncontextual_fraction_cached(atol_key))
+
+    def print_preparation_index_sets(
+        self,
+        preparation_indices: list[tuple[int, ...]] | tuple[tuple[int, ...], ...],
+    ) -> None:
+        """Print preparation index sets used for grouped demos."""
+        print("\nProvided preparation index sets:")
+        for x, idx in enumerate(preparation_indices):
+            print(f"x={x}: preparations {tuple(idx)}")
+
+    def print_measurement_index_sets(
+        self,
+        measurement_indices: list[tuple[int, ...]] | tuple[tuple[int, ...], ...],
+    ) -> None:
+        """Print measurement index sets used for grouped demos."""
+        print("\nProvided measurement index sets:")
+        for y, idx in enumerate(measurement_indices):
+            print(f"y={y}: effects {tuple(idx)}")
+
+    def print_keyrate_pairings(
+        self,
+        keyrate_table: np.ndarray,
+        *,
+        guess_who: str = "Bob",
+        threshold: float = 0.001,
+        precision: int = 3,
+    ) -> None:
+        """Print key-rate-positive setting pairs above threshold."""
+        target = self._normalize_guess_who(guess_who)
+        if target == "Bob":
+            print("\nTaking Bob's outcomes as the master key, then the strictly positive key rate pairings are:")
+        elif target == "Alice":
+            print("\nTaking Alice's outcomes as the master key, then the strictly positive key rate pairings are:")
+        else:
+            print("\nTaking joint (Alice, Bob) outcomes as the master key, then the strictly positive key rate pairings are:")
+
+        qualifying_pairs = [
+            (x, y, float(keyrate_table[x, y]))
+            for x, y in np.ndindex(self.X_cardinality, self.Y_cardinality)
+            if float(keyrate_table[x, y]) > float(threshold)
+        ]
+        if not qualifying_pairs:
+            print("none")
+            return
+        for x, y, value in qualifying_pairs:
+            print(f"(x={x}, y={y}) -> {self._format_numeric_entry(value, precision=precision)}")
+
+    def print_guessing_probability_grids(
+        self,
+        *,
+        guess_who: str = "Bob",
+        precision: int = 3,
+        include_keyrate_pairs: bool = True,
+        keyrate_threshold: float = 0.001,
+        objective_label_map: ObjectiveLabelMap | None = None,
+    ) -> None:
+        """Print Eve/native guessing tables and optional key-rate-positive pairs."""
+        target = self._normalize_guess_who(guess_who)
+        p_guess_eve = self.compute_eve_guessing_table(
+            guess_who=target,
+            objective_label_map=objective_label_map,
+        )
+
+        if target == "Bob":
+            target_label = "Bob's outcome"
+            native_label = "Alice optimal"
+            p_guess_native = self.alice_optimal_guessing_bob_probability
+        elif target == "Alice":
+            target_label = "Alice's outcome"
+            native_label = "Bob optimal"
+            p_guess_native = self.bob_optimal_guessing_alice
+        else:
+            target_label = "the joint (Alice, Bob) outcome pair"
+            native_label = "Largest joint"
+            p_guess_native = self.largest_joint_probability
+
+        float_formatter = {"float_kind": lambda value: self._format_numeric_entry(value, precision=precision)}
+        print(f"\nEve optimal guessing probabilities for {target_label} (rows: x, columns: y):")
+        print(np.array2string(np.asarray(p_guess_eve, dtype=float), formatter=float_formatter))
+        if objective_label_map is None:
+            print(f"\n{native_label} guessing probabilities for {target_label} (rows: x, columns: y):")
+            print(np.array2string(np.asarray(p_guess_native, dtype=float), formatter=float_formatter))
+        else:
+            print("\nNative guessing table is omitted for custom objective_label_map.")
+
+        if include_keyrate_pairs:
+            keyrate_table = self.compute_keyrate_table(
+                guess_who=target,
+                objective_label_map=objective_label_map,
+            )
+            self.print_keyrate_pairings(
+                keyrate_table,
+                guess_who=target,
+                threshold=keyrate_threshold,
+                precision=precision,
+            )
+
+    def print_contextuality_measures(
+        self,
+        metrics: list[str] | tuple[str, ...] | None = None,
+        *,
+        precision: int = 3,
+    ) -> None:
+        """Print selected contextuality measures."""
+        metric_list = ["dephasing_robustness", "contextual_fraction"] if metrics is None else list(metrics)
+        canonical_metrics = [self._normalize_contextuality_metric_name(metric) for metric in metric_list]
+        print("\nMeasures of Contextuality (closer to 1 means more contextual):")
+        for metric in canonical_metrics:
+            if metric == "dephasing_robustness":
+                value = self.compute_dephasing_robustness()
+                print(f"dephasing robustness = {self._format_numeric_entry(value, precision=precision)}")
+            elif metric == "contextual_fraction":
+                value = self.compute_contextual_fraction()
+                print(f"contextual fraction = {self._format_numeric_entry(value, precision=precision)}")
+            elif metric == "noncontextual_fraction":
+                value = self.compute_noncontextual_fraction()
+                print(f"noncontextual fraction = {self._format_numeric_entry(value, precision=precision)}")
 
     @cached_property
     def data_numeric(self) -> np.ndarray:

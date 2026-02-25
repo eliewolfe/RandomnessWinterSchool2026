@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from itertools import combinations
+from typing import Sequence
 
 import numpy as np
 
@@ -166,6 +167,44 @@ def unit_effect_vector(d: int) -> np.ndarray:
     return vec
 
 
+def xz_plane_ket(theta: object) -> object:
+    """Return real-amplitude qubit ket in the X-Z Bloch plane."""
+    import sympy
+
+    theta_sym = sympy.sympify(theta)
+    return sympy.Matrix([sympy.cos(theta_sym / 2), sympy.sin(theta_sym / 2)])
+
+
+def normalize_integer_rays_symbolic(rays: np.ndarray) -> list[object]:
+    """Normalize integer-valued ray rows exactly using SymPy."""
+    import sympy
+
+    ray_array = np.asarray(rays, dtype=int)
+    if ray_array.ndim != 2:
+        raise ValueError("rays must have shape (N, d).")
+
+    normalized_kets: list[object] = []
+    for row in ray_array:
+        row_sym = [sympy.Integer(int(entry)) for entry in row]
+        norm_sq = sum(entry * entry for entry in row_sym)
+        if norm_sq == 0:
+            raise ValueError("Cannot normalize zero ray.")
+        norm = sympy.sqrt(norm_sq)
+        normalized_kets.append(sympy.Matrix([entry / norm for entry in row_sym]))
+    return normalized_kets
+
+
+def group_gpt_vectors_by_indices(
+    gpt_vector_set: np.ndarray,
+    grouped_indices: list[tuple[int, ...]] | tuple[tuple[int, ...], ...],
+) -> np.ndarray:
+    """Group flat GPT vectors by setting-index tuples into ragged-friendly arrays."""
+    return np.array(
+        [[gpt_vector_set[idx] for idx in index_group] for index_group in grouped_indices],
+        dtype=object,
+    )
+
+
 def probability_table_from_gpt_vectors(
     gpt_states: np.ndarray,
     gpt_effects: np.ndarray,
@@ -261,8 +300,11 @@ def discover_operational_equivalences_from_gpt_objects(
     )
     raw = np.asarray(objects_raw, dtype=complex)
     if raw.size and np.max(np.abs(np.imag(raw))) > atol:
-        raise ValueError("gpt_objects contains significant imaginary components.")
-    objects = np.real_if_close(raw).astype(float)
+        # Preserve real linear constraints for genuinely complex coordinates
+        # by representing each vector as concatenated [Re(v), Im(v)].
+        objects = np.concatenate([np.real(raw), np.imag(raw)], axis=-1).astype(float, copy=False)
+    else:
+        objects = np.real_if_close(raw).astype(float, copy=False)
 
     num_s, num_o, vec_dim = objects.shape
     matrix_full = objects.reshape(num_s * num_o, vec_dim)
@@ -389,205 +431,543 @@ def data_table_from_gpt_states_and_effect_set(
     return joint, measurement_indices
 
 
-def contextuality_scenario_from_gpt(
-    gpt_states: np.ndarray,
-    gpt_effect_set: np.ndarray,
-    source_outcome_distribution: np.ndarray | None = None,
-    unit_effect: np.ndarray | None = None,
-    atol: float = 1e-9,
-    outcomes_per_measurement: int | None = None,
-    drop_tiny_imag: bool = True,
-    verbose: bool = False,
-    return_measurement_indices: bool = False,
-) -> ContextualityScenario | tuple[ContextualityScenario, list[tuple[int, ...]]]:
-    """Build a full ``ContextualityScenario`` from GPT states and a flat effect set.
+class GPTContextualityScenario(ContextualityScenario):
+    """Contextuality scenario built directly from GPT primitives.
 
-    Motivation
-    ----------
-    Use this when your model is already in GPT-vector form and you want the package
-    to infer measurement groupings and operational equivalences automatically before
-    running randomness LPs.
-
-    How to use it with other functions
-    ----------------------------------
-    This is the main bridge from GPT object descriptions to optimization. The
-    returned ``ContextualityScenario`` is intended to be passed directly into
-    ``eve_optimal_guessing_probability`` or
-    ``eve_optimal_average_guessing_probability``.
-
-    Input/output structure
-    ----------------------
-    ``gpt_states`` accepts ``(X, K)`` (interpreted as one source outcome per ``x``)
-    or ``(X, A, K)``. ``gpt_effect_set`` is a flat array ``(N_effects, K)`` from
-    which valid measurements are inferred as subsets summing to the unit effect.
-    Output is a validated ``ContextualityScenario``; with
-    ``return_measurement_indices=True`` it also returns the inferred effect-index
-    tuples (one tuple per measurement setting ``y``).
-
-    High-level implementation
-    -------------------------
-    The function: (1) infers measurements from the effect set, (2) computes the
-    joint table ``P(a,b|x,y)``, (3) discovers preparation and measurement OPEQs via
-    nullspace calculations over GPT vectors, and (4) constructs a
-    ``ContextualityScenario`` with those arrays.
+    Construction always auto-discovers preparation/measurement OPEQ spaces from
+    the provided GPT objects. No manual OPEQ arrays are accepted in this path.
     """
-    states_for_prob, a_cardinality_per_x, _ = normalize_grouped_vectors_settings_single_outcome(
-        gpt_states,
-        name="gpt_states",
-    )
-    if _contains_sympy_entries(gpt_states) or _contains_sympy_entries(source_outcome_distribution):
-        p_a_given_x = _normalize_source_outcome_distribution_symbolic(
-            source_outcome_distribution=source_outcome_distribution,
-            a_cardinality_per_x=a_cardinality_per_x,
-            num_x=states_for_prob.shape[0],
-            a_max=states_for_prob.shape[1],
-            atol=atol,
+
+    gpt_states_grouped: np.ndarray
+    gpt_effects_grouped: np.ndarray
+    preparation_indices: tuple[tuple[int, ...], ...]
+    measurement_indices: tuple[tuple[int, ...], ...]
+    source_outcome_distribution: object
+
+    def __init__(
+        self,
+        gpt_states: object,
+        gpt_effects: object,
+        *,
+        preparation_indices: Sequence[Sequence[int]] | None = None,
+        measurement_indices: Sequence[Sequence[int]] | None = None,
+        infer_measurement_indices: bool = False,
+        source_outcome_distribution: object | None = None,
+        unit_effect: np.ndarray | None = None,
+        atol: float = 1e-9,
+        outcomes_per_measurement: int | None = None,
+        drop_tiny_imag: bool = True,
+        verbose: bool = False,
+    ) -> None:
+        if measurement_indices is not None and infer_measurement_indices:
+            raise ValueError(
+                "Provide measurement_indices or set infer_measurement_indices=True, not both."
+            )
+
+        states_grouped, prep_indices_resolved = _resolve_grouped_gpt_vectors(
+            gpt_values=gpt_states,
+            grouped_indices=preparation_indices,
+            name="gpt_states",
         )
-    else:
-        p_a_given_x = _normalize_source_outcome_distribution_numeric(
-            source_outcome_distribution=source_outcome_distribution,
-            a_cardinality_per_x=a_cardinality_per_x,
-            num_x=states_for_prob.shape[0],
-            a_max=states_for_prob.shape[1],
-            atol=atol,
+
+        if measurement_indices is not None:
+            effects_grouped, measurement_indices_resolved = _resolve_grouped_gpt_vectors(
+                gpt_values=gpt_effects,
+                grouped_indices=measurement_indices,
+                name="gpt_effects",
+            )
+        elif infer_measurement_indices:
+            effects_flat = _coerce_flat_vector_set(gpt_effects, name="gpt_effects")
+            effects_grouped, inferred_idx = infer_measurements_from_gpt_effect_set(
+                gpt_effect_set=effects_flat,
+                unit_effect=unit_effect,
+                atol=atol,
+                outcomes_per_measurement=outcomes_per_measurement,
+            )
+            measurement_indices_resolved = tuple(
+                tuple(int(entry) for entry in combo) for combo in inferred_idx
+            )
+        else:
+            effects_grouped, measurement_indices_resolved = _resolve_grouped_gpt_vectors(
+                gpt_values=gpt_effects,
+                grouped_indices=None,
+                name="gpt_effects",
+            )
+
+        states_dense, a_cardinality_per_x, _ = normalize_grouped_vectors_settings_single_outcome(
+            states_grouped,
+            name="gpt_states",
         )
-    weighted_states_for_opeq = [
-        [
-            p_a_given_x[x, a] * states_for_prob[x, a, :]
-            for a in range(int(a_cardinality_per_x[x]))
+        effects_dense, b_cardinality_per_y, _ = normalize_grouped_vectors_settings_single_outcome(
+            effects_grouped,
+            name="gpt_effects",
+        )
+
+        if _contains_sympy_entries(states_dense) or _contains_sympy_entries(source_outcome_distribution):
+            p_a_given_x = _normalize_source_outcome_distribution_symbolic(
+                source_outcome_distribution=source_outcome_distribution,
+                a_cardinality_per_x=a_cardinality_per_x,
+                num_x=states_dense.shape[0],
+                a_max=states_dense.shape[1],
+                atol=atol,
+            )
+        else:
+            p_a_given_x = _normalize_source_outcome_distribution_numeric(
+                source_outcome_distribution=source_outcome_distribution,
+                a_cardinality_per_x=a_cardinality_per_x,
+                num_x=states_dense.shape[0],
+                a_max=states_dense.shape[1],
+                atol=atol,
+            )
+
+        weighted_states_for_opeq = [
+            [
+                p_a_given_x[x, a] * states_dense[x, a, :]
+                for a in range(int(a_cardinality_per_x[x]))
+            ]
+            for x in range(states_dense.shape[0])
         ]
-        for x in range(states_for_prob.shape[0])
-    ]
+        effects_for_opeq = [
+            [effects_dense[y, b, :] for b in range(int(b_cardinality_per_y[y]))]
+            for y in range(effects_dense.shape[0])
+        ]
 
-    measurement_effects, measurement_indices = infer_measurements_from_gpt_effect_set(
-        gpt_effect_set=gpt_effect_set,
-        unit_effect=unit_effect,
-        atol=atol,
-        outcomes_per_measurement=outcomes_per_measurement,
-    )
-    data_table = probability_table_from_gpt_vectors(
-        gpt_states=gpt_states,
-        gpt_effects=measurement_effects,
-        source_outcome_distribution=source_outcome_distribution,
-        normalize_source_outcomes=True,
-        atol=atol,
-        drop_tiny_imag=drop_tiny_imag,
-    )
-    b_cardinality_per_y = np.array([len(combo) for combo in measurement_indices], dtype=int)
-    measurement_effects_for_opeq = [
-        [measurement_effects[y, b, :] for b in range(int(b_cardinality_per_y[y]))]
-        for y in range(len(measurement_indices))
-    ]
+        data_table = probability_table_from_gpt_vectors(
+            gpt_states=states_grouped,
+            gpt_effects=effects_grouped,
+            source_outcome_distribution=source_outcome_distribution,
+            normalize_source_outcomes=True,
+            atol=atol,
+            drop_tiny_imag=drop_tiny_imag,
+        )
+        opeq_preps = discover_operational_equivalences_from_gpt_objects(
+            weighted_states_for_opeq,
+            atol=atol,
+        )
+        opeq_meas = discover_operational_equivalences_from_gpt_objects(
+            effects_for_opeq,
+            atol=atol,
+        )
 
-    opeq_preps = discover_operational_equivalences_from_gpt_objects(weighted_states_for_opeq, atol=atol)
-    opeq_meas = discover_operational_equivalences_from_gpt_objects(measurement_effects_for_opeq, atol=atol)
+        super().__init__(
+            data=data_table,
+            opeq_preps=opeq_preps,
+            opeq_meas=opeq_meas,
+            atol=atol,
+            verbose=verbose,
+        )
 
-    scenario = ContextualityScenario(
-        data=data_table,
-        opeq_preps=opeq_preps,
-        opeq_meas=opeq_meas,
-        atol=atol,
-        verbose=verbose,
-    )
-    if verbose:
-        print("\nInferred measurement index sets:")
-        for y, idx in enumerate(measurement_indices):
-            print(f"y={y}: effects {idx}")
-    if return_measurement_indices:
-        return scenario, measurement_indices
-    return scenario
+        self.gpt_states_grouped = _grouped_vectors_from_dense(states_dense, a_cardinality_per_x)
+        self.gpt_effects_grouped = _grouped_vectors_from_dense(effects_dense, b_cardinality_per_y)
+        self.preparation_indices = prep_indices_resolved
+        self.measurement_indices = measurement_indices_resolved
+        self.source_outcome_distribution = source_outcome_distribution
+
+        if verbose and infer_measurement_indices:
+            print("\nInferred measurement index sets:")
+            for y, idx in enumerate(self.measurement_indices):
+                print(f"y={y}: effects {idx}")
 
 
-def contextuality_scenario_from_quantum(
-    quantum_states: np.ndarray,
-    quantum_effect_set: np.ndarray,
-    source_outcome_distribution: np.ndarray | None = None,
-    basis: np.ndarray | None = None,
-    unit_effect: np.ndarray | None = None,
-    atol: float = 1e-9,
-    outcomes_per_measurement: int | None = None,
-    drop_tiny_imag: bool = True,
-    verbose: bool = False,
-    return_measurement_indices: bool = False,
-) -> ContextualityScenario | tuple[ContextualityScenario, list[tuple[int, ...]]]:
-    """Build a ``ContextualityScenario`` from density operators and effects.
+class QuantumContextualityScenario(GPTContextualityScenario):
+    """Contextuality scenario built from quantum states/effects.
 
-    Motivation
-    ----------
-    Use this when your starting point is quantum objects (matrices), but you want
-    the same scenario representation used by the GPT and LP tooling in this package.
-
-    How to use it with other functions
-    ----------------------------------
-    This is the quantum entry point for downstream randomness analysis. After
-    construction, pass the returned scenario to
-    ``eve_optimal_guessing_probability`` or
-    ``eve_optimal_average_guessing_probability``.
-
-    Input/output structure
-    ----------------------
-    ``quantum_states`` may be ``(X, d, d)`` or ``(X, A, d, d)``. The effect input is
-    a flat set ``quantum_effect_set`` with shape ``(N_effects, d, d)``. Optional
-    arguments control basis conversion, tolerance, inferred measurement cardinality,
-    and verbosity. Returns a ``ContextualityScenario`` and optionally inferred
-    measurement index tuples.
-
-    High-level implementation
-    -------------------------
-    The function normally converts matrices to GPT vectors in a Hilbert-Schmidt
-    Gell-Mann basis, then delegates scenario assembly to
-    ``contextuality_scenario_from_gpt``. When states and effects are all projectors
-    and no custom basis/unit-effect is supplied, it uses a faster projector
-    vectorization path instead. This keeps measurement grouping and OPEQ discovery
-    consistent while avoiding unnecessary basis expansion.
+    This constructor converts quantum matrices to GPT vectors and then delegates to
+    ``GPTContextualityScenario`` for data assembly and OPEQ discovery.
     """
-    q_states = np.asarray(quantum_states, dtype=complex)
-    q_effects = np.asarray(quantum_effect_set, dtype=complex)
-    if q_effects.ndim != 3 or q_effects.shape[-2] != q_effects.shape[-1]:
-        raise ValueError("quantum_effect_set must have shape (N_effects, d, d).")
-    d = q_effects.shape[-1]
 
-    if q_states.ndim == 3:
-        if q_states.shape[-2] != q_states.shape[-1]:
-            raise ValueError("quantum_states must have square matrices.")
-        if q_states.shape[-1] != d:
-            raise ValueError("quantum_states and quantum_effect_set dimensions must match.")
-    elif q_states.ndim == 4:
-        if q_states.shape[-2] != q_states.shape[-1]:
-            raise ValueError("quantum_states must have square matrices.")
-        if q_states.shape[-1] != d:
-            raise ValueError("quantum_states and quantum_effect_set dimensions must match.")
-    else:
-        raise ValueError("quantum_states must have shape (X,d,d) or (X,A,d,d).")
+    quantum_states_grouped: tuple[tuple[np.ndarray, ...], ...]
+    quantum_effects_grouped: tuple[tuple[np.ndarray, ...], ...]
+    basis_used: np.ndarray | None
+    unit_effect_used: np.ndarray | None
+    used_projector_fast_path: bool
 
-    use_projector_fast_path = (
-        basis is None
-        and unit_effect is None
-        and _all_projectors(q_states, atol=atol)
-        and _all_projectors(q_effects, atol=atol)
+    def __init__(
+        self,
+        quantum_states: object,
+        quantum_effects: object,
+        *,
+        preparation_indices: Sequence[Sequence[int]] | None = None,
+        measurement_indices: Sequence[Sequence[int]] | None = None,
+        infer_measurement_indices: bool = False,
+        source_outcome_distribution: object | None = None,
+        basis: np.ndarray | None = None,
+        unit_effect: np.ndarray | None = None,
+        atol: float = 1e-9,
+        outcomes_per_measurement: int | None = None,
+        drop_tiny_imag: bool = True,
+        verbose: bool = False,
+    ) -> None:
+        if measurement_indices is not None and infer_measurement_indices:
+            raise ValueError(
+                "Provide measurement_indices or set infer_measurement_indices=True, not both."
+            )
+
+        states_grouped_quantum, prep_indices_resolved = _resolve_grouped_quantum_matrices(
+            quantum_values=quantum_states,
+            grouped_indices=preparation_indices,
+            name="quantum_states",
+        )
+        states_flat_for_checks = _flatten_grouped_quantum_matrices(
+            states_grouped_quantum,
+            name="quantum_states",
+        )
+
+        if measurement_indices is not None:
+            effects_grouped_quantum, measurement_indices_resolved = _resolve_grouped_quantum_matrices(
+                quantum_values=quantum_effects,
+                grouped_indices=measurement_indices,
+                name="quantum_effects",
+            )
+            effects_flat_for_checks = _flatten_grouped_quantum_matrices(
+                effects_grouped_quantum,
+                name="quantum_effects",
+            )
+            quantum_effects_flat = None
+        elif infer_measurement_indices:
+            quantum_effects_flat = _coerce_flat_matrix_set(
+                quantum_effects,
+                name="quantum_effects",
+            )
+            effects_flat_for_checks = quantum_effects_flat
+            effects_grouped_quantum = tuple()
+            measurement_indices_resolved = tuple()
+        else:
+            effects_grouped_quantum, measurement_indices_resolved = _resolve_grouped_quantum_matrices(
+                quantum_values=quantum_effects,
+                grouped_indices=None,
+                name="quantum_effects",
+            )
+            effects_flat_for_checks = _flatten_grouped_quantum_matrices(
+                effects_grouped_quantum,
+                name="quantum_effects",
+            )
+            quantum_effects_flat = None
+
+        if states_flat_for_checks.shape[-1] != effects_flat_for_checks.shape[-1]:
+            raise ValueError("quantum_states and quantum_effects matrix dimensions must match.")
+        d = states_flat_for_checks.shape[-1]
+        # The projector HS-vector shortcut can produce complex GPT coordinates for
+        # genuinely complex quantum matrices (e.g., Y components). To keep GPT
+        # coordinates real-valued by default, only use the shortcut when both
+        # state/effect sets are effectively real.
+        use_projector_fast_path = (
+            basis is None
+            and unit_effect is None
+            and np.max(np.abs(np.imag(states_flat_for_checks))) <= float(atol)
+            and np.max(np.abs(np.imag(effects_flat_for_checks))) <= float(atol)
+            and _all_projectors(states_flat_for_checks, atol=atol)
+            and _all_projectors(effects_flat_for_checks, atol=atol)
+        )
+
+        gpt_states_grouped = _convert_grouped_quantum_matrices_to_gpt(
+            grouped_quantum=states_grouped_quantum,
+            basis=basis,
+            drop_tiny_imag=drop_tiny_imag,
+            use_projector_fast_path=use_projector_fast_path,
+        )
+
+        unit_effect_for_inference = unit_effect
+        if use_projector_fast_path and unit_effect_for_inference is None:
+            unit_effect_for_inference = _matrix_to_hs_vector(
+                np.eye(d, dtype=complex),
+                drop_tiny_imag=drop_tiny_imag,
+            )
+
+        if infer_measurement_indices:
+            assert quantum_effects_flat is not None
+            gpt_effects_flat = _convert_flat_quantum_matrix_set_to_gpt(
+                flat_quantum=quantum_effects_flat,
+                basis=basis,
+                drop_tiny_imag=drop_tiny_imag,
+                use_projector_fast_path=use_projector_fast_path,
+            )
+            gpt_effects_grouped, inferred_idx = infer_measurements_from_gpt_effect_set(
+                gpt_effect_set=gpt_effects_flat,
+                unit_effect=unit_effect_for_inference,
+                atol=atol,
+                outcomes_per_measurement=outcomes_per_measurement,
+            )
+            measurement_indices_resolved = tuple(
+                tuple(int(entry) for entry in combo) for combo in inferred_idx
+            )
+            effects_grouped_quantum = _group_flat_matrices_by_indices(
+                flat_matrices=quantum_effects_flat,
+                grouped_indices=measurement_indices_resolved,
+            )
+        else:
+            gpt_effects_grouped = _convert_grouped_quantum_matrices_to_gpt(
+                grouped_quantum=effects_grouped_quantum,
+                basis=basis,
+                drop_tiny_imag=drop_tiny_imag,
+                use_projector_fast_path=use_projector_fast_path,
+            )
+
+        super().__init__(
+            gpt_states=gpt_states_grouped,
+            gpt_effects=gpt_effects_grouped,
+            preparation_indices=None,
+            measurement_indices=None,
+            infer_measurement_indices=False,
+            source_outcome_distribution=source_outcome_distribution,
+            unit_effect=unit_effect_for_inference,
+            atol=atol,
+            outcomes_per_measurement=outcomes_per_measurement,
+            drop_tiny_imag=drop_tiny_imag,
+            verbose=verbose,
+        )
+
+        self.preparation_indices = prep_indices_resolved
+        self.measurement_indices = measurement_indices_resolved
+        self.quantum_states_grouped = states_grouped_quantum
+        self.quantum_effects_grouped = effects_grouped_quantum
+        self.basis_used = basis
+        self.unit_effect_used = unit_effect_for_inference
+        self.used_projector_fast_path = use_projector_fast_path
+
+        if verbose and use_projector_fast_path:
+            print("Using projector Hilbert-Schmidt vectorization fast path.")
+        if verbose and infer_measurement_indices:
+            print("\nInferred measurement index sets:")
+            for y, idx in enumerate(self.measurement_indices):
+                print(f"y={y}: effects {idx}")
+
+
+def _coerce_flat_vector_set(values: object, *, name: str) -> np.ndarray:
+    """Return flat GPT vectors with shape ``(N, K)``."""
+    flat = np.asarray(values, dtype=object)
+    if flat.ndim != 2:
+        raise ValueError(f"{name} must have flat shape (N, K) when explicit indices/inference are used.")
+    if flat.shape[0] == 0 or flat.shape[1] == 0:
+        raise ValueError(f"{name} must be non-empty.")
+    return flat
+
+
+def _normalize_index_groups(
+    grouped_indices: Sequence[Sequence[int]],
+    *,
+    total_items: int,
+    name: str,
+) -> tuple[tuple[int, ...], ...]:
+    """Validate and normalize grouping indices to nested tuples."""
+    groups = tuple(
+        tuple(int(entry) for entry in group)
+        for group in grouped_indices
+    )
+    if not groups:
+        raise ValueError(f"{name} must contain at least one setting.")
+    for setting_idx, group in enumerate(groups):
+        if not group:
+            raise ValueError(f"{name}[{setting_idx}] must contain at least one index.")
+        for idx in group:
+            if idx < 0 or idx >= int(total_items):
+                raise ValueError(
+                    f"{name}[{setting_idx}] contains out-of-range index {idx}; "
+                    f"valid range is [0, {int(total_items) - 1}]."
+                )
+    return groups
+
+
+def _resolve_grouped_gpt_vectors(
+    gpt_values: object,
+    *,
+    grouped_indices: Sequence[Sequence[int]] | None,
+    name: str,
+) -> tuple[np.ndarray, tuple[tuple[int, ...], ...]]:
+    """Resolve grouped GPT vectors and index metadata."""
+    if grouped_indices is not None:
+        flat = _coerce_flat_vector_set(gpt_values, name=name)
+        normalized_groups = _normalize_index_groups(
+            grouped_indices,
+            total_items=flat.shape[0],
+            name=f"{name}_indices",
+        )
+        grouped = group_gpt_vectors_by_indices(flat, normalized_groups)
+        return grouped, normalized_groups
+
+    grouped, counts, _ = normalize_grouped_vectors_settings_single_outcome(
+        gpt_values,
+        name=name,
+    )
+    local_groups = tuple(tuple(range(int(count))) for count in counts.tolist())
+    return grouped, local_groups
+
+
+def _grouped_vectors_from_dense(dense: np.ndarray, counts: np.ndarray) -> np.ndarray:
+    """Trim padded grouped vectors to ragged object-array form."""
+    return np.array(
+        [[dense[s, o, :] for o in range(int(counts[s]))] for s in range(dense.shape[0])],
+        dtype=object,
     )
 
-    if use_projector_fast_path:
-        gpt_states = _matrix_list_to_hs_vectors(q_states, drop_tiny_imag=drop_tiny_imag)
-        gpt_effect_set = _matrix_list_to_hs_vectors(q_effects, drop_tiny_imag=drop_tiny_imag)
-        unit_effect_for_solver = _matrix_to_hs_vector(np.eye(d, dtype=complex), drop_tiny_imag=drop_tiny_imag)
-        if verbose:
-            print("Using projector Hilbert-Schmidt vectorization fast path.")
-    else:
-        gpt_states = convert_matrix_list_to_vector_list(q_states, basis=basis, drop_tiny_imag=drop_tiny_imag)
-        gpt_effect_set = convert_matrix_list_to_vector_list(q_effects, basis=basis, drop_tiny_imag=drop_tiny_imag)
-        unit_effect_for_solver = unit_effect
 
-    return contextuality_scenario_from_gpt(
-        gpt_states=gpt_states,
-        gpt_effect_set=gpt_effect_set,
-        source_outcome_distribution=source_outcome_distribution,
-        unit_effect=unit_effect_for_solver,
-        atol=atol,
-        outcomes_per_measurement=outcomes_per_measurement,
+def _coerce_flat_matrix_set(values: object, *, name: str) -> np.ndarray:
+    """Return flat quantum matrices with shape ``(N, d, d)``."""
+    mats = np.asarray(values, dtype=complex)
+    if mats.ndim != 3 or mats.shape[-2] != mats.shape[-1]:
+        raise ValueError(f"{name} must have flat shape (N, d, d).")
+    if mats.shape[0] == 0:
+        raise ValueError(f"{name} must contain at least one matrix.")
+    return mats
+
+
+def _is_square_matrix_like(value: object) -> bool:
+    arr = np.asarray(value, dtype=object)
+    return arr.ndim == 2 and arr.shape[0] == arr.shape[1] and arr.shape[0] > 0
+
+
+def _coerce_grouped_matrix_settings(values: object, *, name: str) -> tuple[tuple[np.ndarray, ...], ...]:
+    """Normalize grouped quantum matrix input to nested tuples."""
+    dense: np.ndarray | None = None
+    try:
+        dense = np.asarray(values, dtype=complex)
+    except (TypeError, ValueError):
+        dense = None
+    if dense is not None:
+        if dense.ndim == 4 and dense.shape[-2] == dense.shape[-1]:
+            return tuple(
+                tuple(dense[s, o, :, :] for o in range(dense.shape[1]))
+                for s in range(dense.shape[0])
+            )
+        if dense.ndim == 3 and dense.shape[-2] == dense.shape[-1]:
+            return tuple((dense[s, :, :],) for s in range(dense.shape[0]))
+
+    if not isinstance(values, (list, tuple, np.ndarray)):
+        raise ValueError(f"{name} must be array-like.")
+    settings = list(values)
+    if not settings:
+        raise ValueError(f"{name} must contain at least one setting.")
+
+    grouped: list[tuple[np.ndarray, ...]] = []
+    for s_idx, setting in enumerate(settings):
+        if _is_square_matrix_like(setting):
+            outcomes = [setting]
+        else:
+            if not isinstance(setting, (list, tuple, np.ndarray)):
+                raise ValueError(f"{name}[{s_idx}] is not list-like.")
+            outcomes = list(setting)
+            if not outcomes:
+                raise ValueError(f"{name}[{s_idx}] has zero outcomes.")
+
+        row: list[np.ndarray] = []
+        for o_idx, matrix in enumerate(outcomes):
+            mat = np.asarray(matrix, dtype=complex)
+            if mat.ndim != 2 or mat.shape[0] != mat.shape[1]:
+                raise ValueError(f"{name}[{s_idx}][{o_idx}] is not a square matrix.")
+            row.append(mat)
+        grouped.append(tuple(row))
+
+    d = grouped[0][0].shape[0]
+    for s_idx, row in enumerate(grouped):
+        for o_idx, mat in enumerate(row):
+            if mat.shape != (d, d):
+                raise ValueError(
+                    f"{name}[{s_idx}][{o_idx}] has shape {mat.shape}, expected {(d, d)}."
+                )
+    return tuple(grouped)
+
+
+def _resolve_grouped_quantum_matrices(
+    quantum_values: object,
+    *,
+    grouped_indices: Sequence[Sequence[int]] | None,
+    name: str,
+) -> tuple[tuple[tuple[np.ndarray, ...], ...], tuple[tuple[int, ...], ...]]:
+    """Resolve grouped quantum matrices and associated index metadata."""
+    if grouped_indices is not None:
+        flat = _coerce_flat_matrix_set(quantum_values, name=name)
+        normalized_groups = _normalize_index_groups(
+            grouped_indices,
+            total_items=flat.shape[0],
+            name=f"{name}_indices",
+        )
+        grouped = _group_flat_matrices_by_indices(flat_matrices=flat, grouped_indices=normalized_groups)
+        return grouped, normalized_groups
+
+    grouped = _coerce_grouped_matrix_settings(quantum_values, name=name)
+    local_groups = tuple(tuple(range(len(setting))) for setting in grouped)
+    return grouped, local_groups
+
+
+def _group_flat_matrices_by_indices(
+    flat_matrices: np.ndarray,
+    grouped_indices: Sequence[Sequence[int]],
+) -> tuple[tuple[np.ndarray, ...], ...]:
+    """Group a flat ``(N,d,d)`` matrix set by index tuples."""
+    grouped: list[tuple[np.ndarray, ...]] = []
+    for group in grouped_indices:
+        grouped.append(tuple(flat_matrices[int(idx), :, :] for idx in group))
+    return tuple(grouped)
+
+
+def _flatten_grouped_quantum_matrices(
+    grouped_quantum: tuple[tuple[np.ndarray, ...], ...],
+    *,
+    name: str,
+) -> np.ndarray:
+    """Flatten grouped quantum matrices to ``(N,d,d)`` for checks."""
+    flat = [matrix for setting in grouped_quantum for matrix in setting]
+    if not flat:
+        raise ValueError(f"{name} must contain at least one matrix.")
+    return np.stack(flat, axis=0)
+
+
+def _convert_grouped_quantum_matrices_to_gpt(
+    grouped_quantum: tuple[tuple[np.ndarray, ...], ...],
+    *,
+    basis: np.ndarray | None,
+    drop_tiny_imag: bool,
+    use_projector_fast_path: bool,
+) -> np.ndarray:
+    """Convert grouped quantum matrices to grouped GPT vectors."""
+    return np.array(
+        [
+            [
+                _convert_single_quantum_matrix_to_gpt(
+                    matrix,
+                    basis=basis,
+                    drop_tiny_imag=drop_tiny_imag,
+                    use_projector_fast_path=use_projector_fast_path,
+                )
+                for matrix in setting
+            ]
+            for setting in grouped_quantum
+        ],
+        dtype=object,
+    )
+
+
+def _convert_flat_quantum_matrix_set_to_gpt(
+    flat_quantum: np.ndarray,
+    *,
+    basis: np.ndarray | None,
+    drop_tiny_imag: bool,
+    use_projector_fast_path: bool,
+) -> np.ndarray:
+    """Convert a flat quantum matrix set ``(N,d,d)`` to GPT vectors ``(N,K)``."""
+    if use_projector_fast_path:
+        return _matrix_list_to_hs_vectors(flat_quantum, drop_tiny_imag=drop_tiny_imag)
+    return convert_matrix_list_to_vector_list(
+        flat_quantum,
+        basis=basis,
         drop_tiny_imag=drop_tiny_imag,
-        verbose=verbose,
-        return_measurement_indices=return_measurement_indices,
+    )
+
+
+def _convert_single_quantum_matrix_to_gpt(
+    matrix: np.ndarray,
+    *,
+    basis: np.ndarray | None,
+    drop_tiny_imag: bool,
+    use_projector_fast_path: bool,
+) -> np.ndarray:
+    """Convert one quantum matrix to one GPT vector."""
+    if use_projector_fast_path:
+        return _matrix_to_hs_vector(matrix, drop_tiny_imag=drop_tiny_imag)
+    return convert_matrix_to_vector(
+        matrix,
+        basis=basis,
+        drop_tiny_imag=drop_tiny_imag,
     )
 
 
@@ -882,7 +1262,20 @@ def _discover_operational_equivalences_from_gpt_objects_symbolic(
     matrix_full = objects.reshape(num_s * num_o, vec_dim)
     valid_indices = flatten_valid_indices(valid_mask)
     matrix = matrix_full[valid_indices, :]
-    basis_reduced = null_space_basis(matrix.T, atol=atol, method="sympy")
+    sym_matrix = sympy.Matrix(
+        [
+            [sympy.sympify(matrix[row, col]) for col in range(matrix.shape[1])]
+            for row in range(matrix.shape[0])
+        ]
+    )
+    nullspace_cols = sym_matrix.T.nullspace()
+    if not nullspace_cols:
+        basis_reduced = np.empty((0, matrix.shape[0]), dtype=object)
+    else:
+        basis_reduced = np.empty((len(nullspace_cols), matrix.shape[0]), dtype=object)
+        for basis_idx, col in enumerate(nullspace_cols):
+            for row_idx in range(matrix.shape[0]):
+                basis_reduced[basis_idx, row_idx] = sympy.simplify(col[row_idx])
     basis_full = embed_basis_rows_to_padded(
         basis_reduced,
         valid_flat_indices=valid_indices,

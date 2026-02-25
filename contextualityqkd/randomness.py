@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import math
-from typing import Literal
+from typing import Callable, Literal
 
 import mosek
 import numpy as np
@@ -12,6 +12,7 @@ from .scenario import ContextualityScenario
 
 
 GuessWho = Literal["Bob", "Alice", "Both"]
+ObjectiveLabelMap = Callable[[int, int, int, int], int | None]
 
 
 def _normalize_guess_who(guess_who: str | None) -> GuessWho:
@@ -49,11 +50,23 @@ def min_entropy(p_guess: float) -> float:
     return float(-math.log2(p_guess))
 
 
+def binary_entropy(probability: float, atol: float = 1e-12) -> float:
+    """Return binary Shannon entropy ``h2(p)`` with endpoint handling."""
+    p = float(probability)
+    if p < -float(atol) or p > 1.0 + float(atol):
+        raise ValueError("probability must be in [0,1].")
+    p = min(max(p, 0.0), 1.0)
+    if p <= float(atol) or p >= 1.0 - float(atol):
+        return 0.0
+    return float(-(p * math.log2(p) + (1.0 - p) * math.log2(1.0 - p)))
+
+
 def eve_optimal_guessing_probability(
     scenario: ContextualityScenario,
     x: int = 0,
     y: int = 0,
     guess_who: str = "Bob",
+    objective_label_map: ObjectiveLabelMap | None = None,
 ) -> float:
     """Compute Eve's best guessing probability for one chosen target ``(x, y)``.
 
@@ -66,7 +79,7 @@ def eve_optimal_guessing_probability(
     How to use it with other functions
     ----------------------------------
     Build a ``ContextualityScenario`` first (directly, or via
-    ``contextuality_scenario_from_gpt`` / ``contextuality_scenario_from_quantum``),
+    ``GPTContextualityScenario`` / ``QuantumContextualityScenario``),
     then call this function with the desired ``x`` and ``y``. Convert the result to
     min-entropy with ``min_entropy`` if needed.
 
@@ -93,6 +106,7 @@ def eve_optimal_guessing_probability(
         scenario=scenario,
         objective_terms=[(x, y, 1.0)],
         guess_who=target,
+        objective_label_map=objective_label_map,
     )
     return float(p_guess)
 
@@ -100,6 +114,7 @@ def eve_optimal_guessing_probability(
 def eve_optimal_average_guessing_probability(
     scenario: ContextualityScenario,
     guess_who: str = "Bob",
+    objective_label_map: ObjectiveLabelMap | None = None,
 ) -> float:
     """Compute Eve's optimal guessing probability averaged over all ``(x, y)``.
 
@@ -137,6 +152,7 @@ def eve_optimal_average_guessing_probability(
         scenario=scenario,
         objective_terms=objective_terms,
         guess_who=target,
+        objective_label_map=objective_label_map,
     )
     return float(p_guess)
 
@@ -144,6 +160,7 @@ def eve_optimal_average_guessing_probability(
 def analyze_scenario(
     scenario: ContextualityScenario,
     guess_who: str = "Bob",
+    objective_label_map: ObjectiveLabelMap | None = None,
 ) -> tuple[np.ndarray, np.ndarray]:
     """Compute and cache Eve guessing and key-rate tables on ``scenario``.
 
@@ -159,6 +176,7 @@ def analyze_scenario(
     p_guess_eve_table = _solve_guessing_lp_hotstart_table(
         scenario=scenario,
         guess_who=target,
+        objective_label_map=objective_label_map,
     )
 
     if target == "Bob":
@@ -172,8 +190,6 @@ def analyze_scenario(
     for x, y in np.ndindex(num_x, num_y):
         keyrate_table[x, y] = reverse_fano_bound(p_guess_eve_table[x, y]) - conditional_entropy_table[x, y]
 
-    scenario.set_p_guess_eve_table(p_guess_eve_table, guess_who=target)
-    scenario.set_keyrate_table(keyrate_table, guess_who=target)
     return p_guess_eve_table, keyrate_table
 
 
@@ -364,6 +380,7 @@ def _solve_guessing_lp_hotstart_table(
     scenario: ContextualityScenario,
     target_pairs: list[tuple[int, int]] | None = None,
     guess_who: GuessWho = "Bob",
+    objective_label_map: ObjectiveLabelMap | None = None,
 ) -> np.ndarray:
     """Solve selected single-target Eve objectives by re-optimizing one primal simplex task."""
     (
@@ -400,7 +417,18 @@ def _solve_guessing_lp_hotstart_table(
         idx_list: list[int] = []
         for a in range(int(a_cardinality_per_x[target_x])):
             for b in range(int(b_cardinality_per_y[target_y])):
-                guessed_e = guess_event_index(a, b)
+                if objective_label_map is None:
+                    guessed_e = guess_event_index(a, b)
+                else:
+                    label = objective_label_map(int(target_x), int(target_y), int(a), int(b))
+                    if label is None:
+                        continue
+                    guessed_e = int(label)
+                    if guessed_e < 0 or guessed_e >= _num_e:
+                        raise ValueError(
+                            f"objective_label_map returned out-of-range label {guessed_e}; "
+                            f"expected 0..{_num_e - 1}."
+                        )
                 idx_list.append(var_index(target_x, target_y, a, b, guessed_e))
         objective_indices[(target_x, target_y)] = np.asarray(idx_list, dtype=int)
 
@@ -444,6 +472,7 @@ def _solve_guessing_lp_aggregate_objective(
     scenario: ContextualityScenario,
     objective_terms: list[tuple[int, int, float]],
     guess_who: GuessWho = "Bob",
+    objective_label_map: ObjectiveLabelMap | None = None,
 ) -> float:
     """Solve one LP with a weighted aggregate objective over target settings."""
     (
@@ -479,7 +508,18 @@ def _solve_guessing_lp_aggregate_objective(
             raise ValueError(f"y must be in 0..{num_y - 1}.")
         for a in range(int(a_cardinality_per_x[x])):
             for b in range(int(b_cardinality_per_y[y])):
-                guessed_e = guess_event_index(a, b)
+                if objective_label_map is None:
+                    guessed_e = guess_event_index(a, b)
+                else:
+                    label = objective_label_map(int(x), int(y), int(a), int(b))
+                    if label is None:
+                        continue
+                    guessed_e = int(label)
+                    if guessed_e < 0 or guessed_e >= _num_e:
+                        raise ValueError(
+                            f"objective_label_map returned out-of-range label {guessed_e}; "
+                            f"expected 0..{_num_e - 1}."
+                        )
                 idx = int(var_index(x, y, a, b, guessed_e))
                 objective_coeffs[idx] = objective_coeffs.get(idx, 0.0) + w
 

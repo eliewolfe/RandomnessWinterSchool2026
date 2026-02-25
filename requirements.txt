@@ -3,3 +3,4 @@ mosek
 scipy
 pycddlib
 sympy
+methodtools
