@@ -583,7 +583,7 @@ def normalize_grouped_vectors_settings_single_outcome(
     name: str,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """Normalize grouped vectors where 2D means ``(S, K)`` (one outcome per setting)."""
-    arr = np.asarray(values, dtype=object)
+    arr = np.asarray(values)
     if arr.ndim == 2:
         promoted = arr[:, np.newaxis, :]
         counts = np.ones(promoted.shape[0], dtype=int)
@@ -593,6 +593,16 @@ def normalize_grouped_vectors_settings_single_outcome(
         counts = np.full(arr.shape[0], arr.shape[1], dtype=int)
         valid = np.ones((arr.shape[0], arr.shape[1]), dtype=bool)
         return arr, counts, valid
+    arr_obj = np.asarray(values, dtype=object)
+    if arr_obj.ndim == 2:
+        promoted = arr_obj[:, np.newaxis, :]
+        counts = np.ones(promoted.shape[0], dtype=int)
+        valid = np.ones((promoted.shape[0], 1), dtype=bool)
+        return promoted, counts, valid
+    if arr_obj.ndim == 3:
+        counts = np.full(arr_obj.shape[0], arr_obj.shape[1], dtype=int)
+        valid = np.ones((arr_obj.shape[0], arr_obj.shape[1]), dtype=bool)
+        return arr_obj, counts, valid
     return _normalize_grouped_vectors_ragged(values, name=name)
 
 
@@ -602,7 +612,7 @@ def normalize_grouped_vectors_single_setting_many_outcomes(
     name: str,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """Normalize grouped vectors where 2D means ``(O, K)`` for one setting."""
-    arr = np.asarray(values, dtype=object)
+    arr = np.asarray(values)
     if arr.ndim == 2:
         promoted = arr[np.newaxis, :, :]
         counts = np.array([promoted.shape[1]], dtype=int)
@@ -612,6 +622,16 @@ def normalize_grouped_vectors_single_setting_many_outcomes(
         counts = np.full(arr.shape[0], arr.shape[1], dtype=int)
         valid = np.ones((arr.shape[0], arr.shape[1]), dtype=bool)
         return arr, counts, valid
+    arr_obj = np.asarray(values, dtype=object)
+    if arr_obj.ndim == 2:
+        promoted = arr_obj[np.newaxis, :, :]
+        counts = np.array([promoted.shape[1]], dtype=int)
+        valid = np.ones((1, promoted.shape[1]), dtype=bool)
+        return promoted, counts, valid
+    if arr_obj.ndim == 3:
+        counts = np.full(arr_obj.shape[0], arr_obj.shape[1], dtype=int)
+        valid = np.ones((arr_obj.shape[0], arr_obj.shape[1]), dtype=bool)
+        return arr_obj, counts, valid
     return _normalize_grouped_vectors_ragged(values, name=name)
 
 
@@ -691,6 +711,12 @@ def _normalize_grouped_vectors_ragged(
     *,
     name: str,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    dense = np.asarray(values, dtype=object)
+    if dense.ndim == 3:
+        counts = np.full(dense.shape[0], dense.shape[1], dtype=int)
+        valid = np.ones((dense.shape[0], dense.shape[1]), dtype=bool)
+        return dense, counts, valid
+
     settings = _as_list(values)
     if len(settings) == 0:
         raise ValueError(f"{name} must contain at least one setting.")
@@ -698,11 +724,13 @@ def _normalize_grouped_vectors_ragged(
     num_settings = len(settings)
     counts = np.zeros(num_settings, dtype=int)
     vec_dim: int | None = None
+    settings_as_rows: list[list[list[Any]]] = []
     for setting_idx, setting in enumerate(settings):
         outcomes = _as_list(setting)
         if len(outcomes) == 0:
             raise ValueError(f"{name}[{setting_idx}] has zero outcomes.")
         counts[setting_idx] = len(outcomes)
+        row_vectors: list[list[Any]] = []
         for outcome_idx, outcome in enumerate(outcomes):
             vector = _as_list(outcome)
             if len(vector) == 0:
@@ -714,15 +742,16 @@ def _normalize_grouped_vectors_ragged(
                     f"{name}[{setting_idx}][{outcome_idx}] has vector dimension {len(vector)}, "
                     f"expected {vec_dim}."
                 )
+            row_vectors.append(vector)
+        settings_as_rows.append(row_vectors)
 
     max_outcomes = int(np.max(counts))
     assert vec_dim is not None
     dense = np.empty((num_settings, max_outcomes, vec_dim), dtype=object)
     dense[:, :, :] = 0
     for setting_idx in range(num_settings):
-        outcomes = _as_list(settings[setting_idx])
-        for outcome_idx, outcome in enumerate(outcomes):
-            vector = _as_list(outcome)
+        outcomes = settings_as_rows[setting_idx]
+        for outcome_idx, vector in enumerate(outcomes):
             for k in range(vec_dim):
                 dense[setting_idx, outcome_idx, k] = vector[k]
 

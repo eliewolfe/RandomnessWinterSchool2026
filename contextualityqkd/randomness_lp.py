@@ -1,42 +1,13 @@
-"""Bob-outcome LP backends and entropy helpers."""
+"""Bob-outcome LP backends."""
 
 from __future__ import annotations
 
-import math
 from typing import Sequence
 
 import mosek
 import numpy as np
 
 from .scenario import ContextualityScenario
-
-
-def reverse_fano_bound(p_guess: float) -> float:
-    """Return a lower bound on conditional Shannon entropy in bits from guessing probability."""
-    p = float(p_guess)
-    if p <= 0.0:
-        raise ValueError("p_guess must be strictly positive.")
-    p_eff = min(p, 1.0)
-    f = math.floor(1 / p_eff)
-    c = f + 1
-    return (c * p_eff - 1) * f * math.log2(f) + (1 - f * p_eff) * c * math.log2(c)
-
-
-def min_entropy(p_guess: float) -> float:
-    """Return min-entropy in bits from guessing probability."""
-    return float(-math.log2(float(p_guess)))
-
-
-def binary_entropy(probability: float, atol: float = 1e-12) -> float:
-    """Return binary Shannon entropy ``h2(p)`` with endpoint handling."""
-    p = float(probability)
-    if p < -float(atol) or p > 1.0 + float(atol):
-        raise ValueError("probability must be in [0,1].")
-    p = min(max(p, 0.0), 1.0)
-    if p <= float(atol) or p >= 1.0 - float(atol):
-        return 0.0
-    return float(-(p * math.log2(p) + (1.0 - p) * math.log2(1.0 - p)))
-
 
 def _build_bob_single_model_lp_components(
     scenario: ContextualityScenario,

@@ -3,15 +3,12 @@
 from __future__ import annotations
 
 from functools import cached_property
+import math
 from typing import Sequence
 
 import numpy as np
 
-from .randomness import (
-    _solve_eve_guess_bob_by_y_lp_hotstart,
-    min_entropy,
-    reverse_fano_bound,
-)
+from .randomness_lp import _solve_eve_guess_bob_by_y_lp_hotstart
 from .scenario import ContextualityScenario
 
 
@@ -30,6 +27,33 @@ class ContextualityProtocol:
             raise TypeError("scenario must be a ContextualityScenario instance.")
         self.scenario = scenario
         self._where_key_input = where_key
+
+    @staticmethod
+    def reverse_fano_bound(p_guess: float) -> float:
+        """Return a lower bound on conditional Shannon entropy in bits from guessing probability."""
+        p = float(p_guess)
+        if p <= 0.0:
+            raise ValueError("p_guess must be strictly positive.")
+        p_eff = min(p, 1.0)
+        f = math.floor(1 / p_eff)
+        c = f + 1
+        return (c * p_eff - 1) * f * math.log2(f) + (1 - f * p_eff) * c * math.log2(c)
+
+    @staticmethod
+    def min_entropy(p_guess: float) -> float:
+        """Return min-entropy in bits from guessing probability."""
+        return float(-math.log2(float(p_guess)))
+
+    @staticmethod
+    def binary_entropy(probability: float, atol: float = 1e-12) -> float:
+        """Return binary Shannon entropy ``h2(p)`` with endpoint handling."""
+        p = float(probability)
+        if p < -float(atol) or p > 1.0 + float(atol):
+            raise ValueError("probability must be in [0,1].")
+        p = min(max(p, 0.0), 1.0)
+        if p <= float(atol) or p >= 1.0 - float(atol):
+            return 0.0
+        return float(-(p * math.log2(p) + (1.0 - p) * math.log2(1.0 - p)))
 
     @cached_property
     def where_key(self) -> tuple[tuple[int, ...], ...]:
@@ -177,7 +201,7 @@ class ContextualityProtocol:
         for y, value in enumerate(self.eve_guess_bob_by_y_lp):
             if not np.isfinite(value) or value <= 0.0:
                 continue
-            out[y] = float(min_entropy(float(value)))
+            out[y] = float(self.min_entropy(float(value)))
         return out
 
     @cached_property
@@ -198,7 +222,7 @@ class ContextualityProtocol:
         for y, value in enumerate(self.eve_guess_bob_by_y_lp):
             if not np.isfinite(value) or value <= 0.0:
                 continue
-            out[y] = float(reverse_fano_bound(float(value)))
+            out[y] = float(self.reverse_fano_bound(float(value)))
         return out
 
     @cached_property
@@ -291,9 +315,11 @@ class ContextualityProtocol:
         *,
         precision_table: int = 3,
         precision_scalar: int = 6,
+        leading_newline: bool = True,
     ) -> None:
         """Print Alice guessing metrics with ``(x,y)`` output masked by key-eligibility."""
-        print("\n" + self.format_alice_guessing_metrics(
+        prefix = "\n" if leading_newline else ""
+        print(prefix + self.format_alice_guessing_metrics(
             precision_table=precision_table,
             precision_scalar=precision_scalar,
         ))
@@ -321,9 +347,11 @@ class ContextualityProtocol:
         *,
         precision_table: int = 3,
         precision_scalar: int = 6,
+        leading_newline: bool = True,
     ) -> None:
         """Print Alice uncertainty metrics with ``(x,y)`` output masked by key-eligibility."""
-        print("\n" + self.format_alice_uncertainty_metrics(
+        prefix = "\n" if leading_newline else ""
+        print(prefix + self.format_alice_uncertainty_metrics(
             precision_table=precision_table,
             precision_scalar=precision_scalar,
         ))
@@ -349,9 +377,11 @@ class ContextualityProtocol:
         *,
         precision_vector: int = 3,
         precision_scalar: int = 6,
+        leading_newline: bool = True,
     ) -> None:
         """Print Eve LP guessing metrics."""
-        print("\n" + self.format_eve_guessing_metrics_lp(
+        prefix = "\n" if leading_newline else ""
+        print(prefix + self.format_eve_guessing_metrics_lp(
             precision_vector=precision_vector,
             precision_scalar=precision_scalar,
         ))
@@ -377,29 +407,38 @@ class ContextualityProtocol:
         *,
         precision_vector: int = 3,
         precision_scalar: int = 6,
+        leading_newline: bool = True,
     ) -> None:
         """Print Eve reverse-Fano uncertainty lower bounds from LP guessing outputs."""
-        print("\n" + self.format_eve_uncertainty_metrics_reverse_fano_lp(
+        prefix = "\n" if leading_newline else ""
+        print(prefix + self.format_eve_uncertainty_metrics_reverse_fano_lp(
             precision_vector=precision_vector,
             precision_scalar=precision_scalar,
         ))
 
-    def format_key_rate_summary_reverse_fano_lp(self, *, precision: int = 6) -> str:
+    def format_key_rate_summary_reverse_fano_lp(self, *, header=False, precision: int = 6) -> str:
         """Format reverse-Fano key-rate summary."""
         lines = [
-            "Key-rate summary (reverse Fano):",
             "bits per key-generating run = "
             f"{ContextualityScenario.format_numeric(self.key_rate_per_key_run_reverse_fano_lp, precision=precision)}",
-            "key generation probability per run = "
+            "key-generating run probability per experimental run = "
             f"{ContextualityScenario.format_numeric(self.key_generation_probability_per_run, precision=precision)}",
             "bits per experimental run = "
             f"{ContextualityScenario.format_numeric(self.key_rate_per_experimental_run_reverse_fano_lp, precision=precision)}",
         ]
+        if header:
+            lines = ["Key-rate summary (reverse Fano):"] + lines
         return "\n".join(lines)
 
-    def print_key_rate_summary_reverse_fano_lp(self, *, precision: int = 6) -> None:
+    def print_key_rate_summary_reverse_fano_lp(
+        self,
+        *,
+        precision: int = 6,
+        leading_newline: bool = True,
+    ) -> None:
         """Print reverse-Fano key-rate summary."""
-        print("\n" + self.format_key_rate_summary_reverse_fano_lp(precision=precision))
+        prefix = "\n" if leading_newline else ""
+        print(prefix + self.format_key_rate_summary_reverse_fano_lp(precision=precision))
 
     def _validate_y_distribution(self, y_distribution: np.ndarray | Sequence[float] | None) -> np.ndarray:
         """Validate optional y-distribution and return normalized weights of shape ``(Y,)``."""

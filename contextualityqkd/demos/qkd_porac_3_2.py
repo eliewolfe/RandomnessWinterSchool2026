@@ -108,7 +108,7 @@ def build_porac_scenario(*, eta: float = 1.0) -> QuantumContextualityScenario:
         minus = 0.5 * (identity - paulis[y])
         quantum_effects_grouped.append([plus, minus])
 
-    return QuantumContextualityScenario(
+    return QuantumContextualityScenario.from_quantum_states_effects(
         quantum_states=np.asarray(quantum_states, dtype=complex),
         quantum_effects=np.asarray(quantum_effects_grouped, dtype=complex),
         verbose=False,
@@ -121,8 +121,6 @@ def main() -> None:
     protocol = ContextualityProtocol(scenario, where_key=None)
 
     ContextualityScenario.print_title("QKD Protocol: (3,2)-PORAC (ideal noiseless case)")
-    scenario.print_preparation_index_sets(tuple((x,) for x in range(scenario.X_cardinality)))
-    scenario.print_measurement_index_sets(scenario.measurement_indices)
 
     print("\nSymbolic probability table p(b|x,y):")
     scenario.print_probabilities(as_p_b_given_x_y=True, precision=3, representation="symbolic")

@@ -16,6 +16,7 @@ import importlib
 
 DEMO_MODULES = [
     "contextualityqkd.demos.qkd_hexagon_projective",
+    "contextualityqkd.demos.qkd_xz_ring",
     "contextualityqkd.demos.qkd_cabello_18ray",
     "contextualityqkd.demos.qkd_peres_24ray",
     "contextualityqkd.demos.qkd_porac_3_2",

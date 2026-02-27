@@ -16,8 +16,6 @@ import numpy as np
 from contextualityqkd.protocol import ContextualityProtocol
 from contextualityqkd.quantum import (
     GPTContextualityScenario,
-    normalize_integer_rays_symbolic,
-    projector_hs_vector,
 )
 from contextualityqkd.scenario import ContextualityScenario
 
@@ -56,21 +54,15 @@ def main() -> None:
         dtype=int,
     )
 
-    kets = normalize_integer_rays_symbolic(rays)
-    gpt_set = np.array([projector_hs_vector(ket) for ket in kets], dtype=object)
-
     measurement_indices = [tuple(range(4 * y, 4 * (y + 1))) for y in range(6)]
 
-    scenario = GPTContextualityScenario(
-        gpt_states=gpt_set,
-        gpt_effects=gpt_set,
+    scenario = GPTContextualityScenario.from_integer_rays(
+        rays=rays,
         measurement_indices=measurement_indices,
         verbose=False,
     )
     protocol = ContextualityProtocol(scenario, where_key=measurement_indices)
 
-    scenario.print_preparation_index_sets(tuple((x,) for x in range(scenario.X_cardinality)))
-    scenario.print_measurement_index_sets(scenario.measurement_indices)
     print("\nSymbolic probability table p(b|x,y):")
     scenario.print_probabilities(as_p_b_given_x_y=True, precision=3, representation="symbolic")
     scenario.print_operational_equivalences(precision=3, representation="symbolic")

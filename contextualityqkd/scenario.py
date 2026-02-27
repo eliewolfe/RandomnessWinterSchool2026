@@ -12,6 +12,7 @@ Data conventions used in this module:
 
 from __future__ import annotations
 
+from copy import deepcopy
 import warnings
 from functools import cached_property
 from typing import Literal
@@ -37,8 +38,6 @@ class ContextualityScenario:
     X_cardinality: int
     Y_cardinality: int
     B_cardinality: int
-    _b_cardinality_per_y: np.ndarray
-    _valid_b_mask: np.ndarray
     atol: float
     verbose: bool
 
@@ -52,65 +51,113 @@ class ContextualityScenario:
     ) -> None:
         self.atol = float(atol)
         self.verbose = bool(verbose)
+        data_input = deepcopy(data)
+        opeq_preps_input = deepcopy(opeq_preps)
+        opeq_meas_input = deepcopy(opeq_meas)
 
-        data_padded, self._b_cardinality_per_y, self._valid_b_mask = normalize_behavior_table_bob(
-            data,
+        data_padded, b_cardinality_per_y, valid_b_mask = normalize_behavior_table_bob(
+            data_input,
             atol=self.atol,
             pad_value=0,
         )
-        self.data_symbolic = self._to_symbolic_array(data_padded)
-        self.X_cardinality, self.Y_cardinality, self.B_cardinality = self.data_symbolic.shape
+        data_symbolic = self._to_symbolic_array(data_padded)
+        x_cardinality, y_cardinality, b_cardinality = data_symbolic.shape
+        data_numeric = self._to_float_array(data_symbolic, atol=self.atol)
 
-        if opeq_preps is None:
+        if opeq_preps_input is None:
             if self.verbose:
                 self._warn_verbose(
                     "Preparation operational equivalences were not provided; "
                     "discovering them from the data-table nullspace."
                 )
-            prep_base = self._to_symbolic_array(self.discover_opeqs_multisource())
+            prep_matrix = data_numeric.transpose(1, 2, 0).reshape(
+                y_cardinality * b_cardinality,
+                x_cardinality,
+            )
+            prep_basis = null_space_basis(prep_matrix, atol=self.atol).reshape(-1, x_cardinality)
+            prep_base = self._to_symbolic_array(prep_basis)
         else:
-            prep_base = self._to_symbolic_array(self._normalize_prep_opeq_array(opeq_preps))
-            self.validate_opeqs_multisource(prep_base)
+            prep_base = self._to_symbolic_array(
+                self._normalize_prep_opeq_array_for_x(opeq_preps_input, x_cardinality=x_cardinality)
+            )
+            prep_coeffs = self._to_float_array(prep_base, atol=self.atol)
+            prep_residual = np.tensordot(prep_coeffs, data_numeric, axes=([1], [0]))
+            if not np.allclose(prep_residual, 0.0, atol=self.atol):
+                raise ValueError("Provided preparation operational equivalences are inconsistent with data.")
 
-        if opeq_meas is None:
+        if opeq_meas_input is None:
             if self.verbose:
                 self._warn_verbose(
                     "Measurement operational equivalences were not provided; "
                     "discovering them from the data-table nullspace."
                 )
-            meas_base = self._to_symbolic_array(self.discover_opeqs_multimeter())
+            meas_matrix = data_numeric.reshape(x_cardinality, y_cardinality * b_cardinality)
+            meas_basis = null_space_basis(meas_matrix, atol=self.atol).reshape(-1, y_cardinality, b_cardinality)
+            meas_base = self._to_symbolic_array(meas_basis)
         else:
             meas_base = self._to_symbolic_array(
                 normalize_opeq_array(
-                    opeq_meas,
-                    num_settings=self.Y_cardinality,
-                    outcome_cardinality_per_setting=self._b_cardinality_per_y,
-                    max_outcomes=self.B_cardinality,
+                    opeq_meas_input,
+                    num_settings=y_cardinality,
+                    outcome_cardinality_per_setting=b_cardinality_per_y,
+                    max_outcomes=b_cardinality,
                     name="Measurement operational equivalences",
                     pad_value=0,
                 )
             )
-            self.validate_opeqs_multimeter(meas_base)
+            meas_coeffs = self._to_float_array(meas_base, atol=self.atol)
+            meas_residual = np.tensordot(meas_coeffs, data_numeric, axes=([1, 2], [1, 2]))
+            if not np.allclose(meas_residual, 0.0, atol=self.atol):
+                raise ValueError("Provided measurement operational equivalences are inconsistent with data.")
 
         meas_structural_zero = structural_zero_opeqs(
-            num_settings=self.Y_cardinality,
-            max_outcomes=self.B_cardinality,
-            outcome_cardinality_per_setting=self._b_cardinality_per_y,
+            num_settings=y_cardinality,
+            max_outcomes=b_cardinality,
+            outcome_cardinality_per_setting=b_cardinality_per_y,
         )
-        self.opeq_preps_symbolic = prep_base
-        self.opeq_meas_symbolic = self._append_structural_zero_opeqs(meas_base, meas_structural_zero)
+        opeq_preps_symbolic = prep_base
+        opeq_meas_symbolic = self._append_structural_zero_opeqs(meas_base, meas_structural_zero)
 
-        self.validate_opeqs_multisource(self.opeq_preps_symbolic)
-        self.validate_opeqs_multimeter(self.opeq_meas_symbolic)
+        # Final consistency validation on the exact stored arrays.
+        prep_coeffs_final = self._to_float_array(opeq_preps_symbolic, atol=self.atol)
+        prep_residual_final = np.tensordot(prep_coeffs_final, data_numeric, axes=([1], [0]))
+        if not np.allclose(prep_residual_final, 0.0, atol=self.atol):
+            raise ValueError("Preparation operational equivalences are inconsistent with data.")
+
+        meas_coeffs_final = self._to_float_array(opeq_meas_symbolic, atol=self.atol)
+        meas_residual_final = np.tensordot(meas_coeffs_final, data_numeric, axes=([1, 2], [1, 2]))
+        if not np.allclose(meas_residual_final, 0.0, atol=self.atol):
+            raise ValueError("Measurement operational equivalences are inconsistent with data.")
+
+        data_symbolic_frozen = self._freeze_array(data_symbolic, dtype=object)
+        opeq_preps_frozen = self._freeze_array(opeq_preps_symbolic, dtype=object)
+        opeq_meas_frozen = self._freeze_array(opeq_meas_symbolic, dtype=object)
+        b_cardinality_frozen = self._freeze_array(b_cardinality_per_y, dtype=int)
+        valid_mask_frozen = self._freeze_array(valid_b_mask, dtype=bool)
+
+        self.data_symbolic = data_symbolic_frozen
+        self.opeq_preps_symbolic = opeq_preps_frozen
+        self.opeq_meas_symbolic = opeq_meas_frozen
+        self.X_cardinality = int(x_cardinality)
+        self.Y_cardinality = int(y_cardinality)
+        self.B_cardinality = int(b_cardinality)
+        self.__b_cardinality_per_y = b_cardinality_frozen
+        self.__valid_b_mask = valid_mask_frozen
 
         if self.verbose:
             self._print_verbose_report()
+
+    @staticmethod
+    def _freeze_array(values: object, *, dtype: object | None = None) -> np.ndarray:
+        arr = np.asarray(values if dtype is None else np.asarray(values, dtype=dtype)).copy()
+        arr.setflags(write=False)
+        return arr
 
     def __repr__(self) -> str:
         return (
             "ContextualityScenario("
             f"X={self.X_cardinality}, Y={self.Y_cardinality}, B={self.B_cardinality}, "
-            f"B_per_y={self._b_cardinality_per_y.tolist()}, "
+            f"B_per_y={self.__b_cardinality_per_y.tolist()}, "
             f"num_opeq_preps={self.opeq_preps_symbolic.shape[0]}, "
             f"num_opeq_meas={self.opeq_meas_symbolic.shape[0]})"
         )
@@ -118,12 +165,12 @@ class ContextualityScenario:
     @property
     def b_cardinality_per_y(self) -> np.ndarray:
         """Per-setting Bob outcome counts, shape ``(Y,)``."""
-        return self._b_cardinality_per_y.copy()
+        return self.__b_cardinality_per_y.copy()
 
     @property
     def valid_b_mask(self) -> np.ndarray:
         """Boolean mask for valid Bob outcomes, shape ``(Y, B)``."""
-        return self._valid_b_mask.copy()
+        return self.__valid_b_mask.copy()
 
     @property
     def data(self) -> np.ndarray:
@@ -170,13 +217,6 @@ class ContextualityScenario:
         """Format one numeric entry using scenario-consistent rounding rules."""
         return ContextualityScenario._format_numeric_entry(value, precision=int(precision))
 
-    @staticmethod
-    def binary_entropy(probability: float, atol: float = 1e-12) -> float:
-        """Return binary Shannon entropy ``h2(p)``."""
-        from .randomness import binary_entropy as _binary_entropy
-
-        return float(_binary_entropy(float(probability), atol=float(atol)))
-
     @lru_cache(maxsize=None)
     def _compute_dephasing_robustness_cached(self, atol_value: float | None) -> float:
         """Cached dephasing robustness with default dephasing target."""
@@ -222,24 +262,6 @@ class ContextualityScenario:
         atol_key = None if atol is None else float(atol)
         return float(self._compute_noncontextual_fraction_cached(atol_key))
 
-    def print_preparation_index_sets(
-        self,
-        preparation_indices: list[tuple[int, ...]] | tuple[tuple[int, ...], ...],
-    ) -> None:
-        """Print preparation index sets used for grouped demos."""
-        print("\nProvided preparation index sets:")
-        for x, idx in enumerate(preparation_indices):
-            print(f"x={x}: preparations {tuple(idx)}")
-
-    def print_measurement_index_sets(
-        self,
-        measurement_indices: list[tuple[int, ...]] | tuple[tuple[int, ...], ...],
-    ) -> None:
-        """Print measurement index sets used for grouped demos."""
-        print("\nProvided measurement index sets:")
-        for y, idx in enumerate(measurement_indices):
-            print(f"y={y}: effects {tuple(idx)}")
-
     def print_contextuality_measures(
         self,
         metrics: list[str] | tuple[str, ...] | None = None,
@@ -267,14 +289,29 @@ class ContextualityScenario:
         return self._to_float_array(self.data_symbolic, atol=self.atol)
 
     @cached_property
+    def data_symbolic_simplified(self) -> np.ndarray:
+        """Cached simplified symbolic data view for display/report formatting."""
+        return self._simplify_symbolic_array(self.data_symbolic)
+
+    @cached_property
     def opeq_preps_numeric(self) -> np.ndarray:
         """Cached numeric preparation OPEQ view for LP solving."""
         return self._to_float_array(self.opeq_preps_symbolic, atol=self.atol)
 
     @cached_property
+    def opeq_preps_symbolic_simplified(self) -> np.ndarray:
+        """Cached simplified symbolic preparation OPEQ view for display/report formatting."""
+        return self._simplify_symbolic_array(self.opeq_preps_symbolic)
+
+    @cached_property
     def opeq_meas_numeric(self) -> np.ndarray:
         """Cached numeric measurement OPEQ view for LP solving."""
         return self._to_float_array(self.opeq_meas_symbolic, atol=self.atol)
+
+    @cached_property
+    def opeq_meas_symbolic_simplified(self) -> np.ndarray:
+        """Cached simplified symbolic measurement OPEQ view for display/report formatting."""
+        return self._simplify_symbolic_array(self.opeq_meas_symbolic)
 
     @cached_property
     def has_symbolic_content(self) -> bool:
@@ -318,7 +355,7 @@ class ContextualityScenario:
             normalize_opeq_array(
                 opeqs,
                 num_settings=self.Y_cardinality,
-                outcome_cardinality_per_setting=self._b_cardinality_per_y,
+                outcome_cardinality_per_setting=self.__b_cardinality_per_y,
                 max_outcomes=self.B_cardinality,
                 name="Measurement operational equivalences",
                 pad_value=0,
@@ -337,7 +374,7 @@ class ContextualityScenario:
         if np.any(numeric_data < -self.atol):
             raise ValueError("data contains negative probabilities.")
 
-        invalid = np.broadcast_to(~self._valid_b_mask[np.newaxis, :, :], numeric_data.shape)
+        invalid = np.broadcast_to(~self.__valid_b_mask[np.newaxis, :, :], numeric_data.shape)
         invalid_entries = np.abs(numeric_data[invalid])
         if invalid_entries.size and np.any(invalid_entries > self.atol):
             raise ValueError("data has nonzero entries in padded (invalid) coordinates.")
@@ -354,10 +391,13 @@ class ContextualityScenario:
         representation: Literal["numeric", "symbolic"] = "numeric",
     ) -> str:
         """Return a readable probability-table string."""
+        symbolic_data = (
+            self.data_symbolic_simplified if representation == "symbolic" else self.data_symbolic
+        )
         data = self._array_for_representation(
             representation=representation,
             numeric=self.data_numeric,
-            symbolic=self.data_symbolic,
+            symbolic=symbolic_data,
         )
         lines = []
         if as_p_b_given_x_y:
@@ -369,7 +409,7 @@ class ContextualityScenario:
 
         for x in range(self.X_cardinality):
             for y in range(self.Y_cardinality):
-                b_count = int(self._b_cardinality_per_y[y])
+                b_count = int(self.__b_cardinality_per_y[y])
                 row = data[x, y, :b_count]
                 lines.append(f"x={x}, y={y}")
                 lines.append(self._format_matrix(row[np.newaxis, :], precision=precision, representation=representation))
@@ -381,15 +421,21 @@ class ContextualityScenario:
         representation: Literal["numeric", "symbolic"] = "numeric",
     ) -> str:
         """Return a readable operational-equivalence string."""
+        symbolic_prep = (
+            self.opeq_preps_symbolic_simplified if representation == "symbolic" else self.opeq_preps_symbolic
+        )
+        symbolic_meas = (
+            self.opeq_meas_symbolic_simplified if representation == "symbolic" else self.opeq_meas_symbolic
+        )
         prep_eqs_repr = self._array_for_representation(
             representation=representation,
             numeric=self.opeq_preps_numeric,
-            symbolic=self.opeq_preps_symbolic,
+            symbolic=symbolic_prep,
         )
         meas_eqs_repr = self._array_for_representation(
             representation=representation,
             numeric=self.opeq_meas_numeric,
-            symbolic=self.opeq_meas_symbolic,
+            symbolic=symbolic_meas,
         )
 
         lines = ["Preparation OPEQs:"]
@@ -444,10 +490,13 @@ class ContextualityScenario:
         representation: Literal["numeric", "symbolic"] = "numeric",
     ) -> str:
         """Return a readable string for measurement operational equivalences only."""
+        symbolic_meas = (
+            self.opeq_meas_symbolic_simplified if representation == "symbolic" else self.opeq_meas_symbolic
+        )
         meas_eqs_repr = self._array_for_representation(
             representation=representation,
             numeric=self.opeq_meas_numeric,
-            symbolic=self.opeq_meas_symbolic,
+            symbolic=symbolic_meas,
         )
         lines = ["Measurement OPEQs:"]
         meas_keep = self._nontrivial_meas_opeq_indices(self.opeq_meas_numeric)
@@ -511,21 +560,33 @@ class ContextualityScenario:
             raise ValueError("base_opeqs and structural_zeros must share setting/outcome dimensions.")
         return np.concatenate([base, zeros], axis=0)
 
-    def _normalize_prep_opeq_array(self, values: object) -> np.ndarray:
+    @staticmethod
+    def _normalize_prep_opeq_array_for_x(values: object, *, x_cardinality: int) -> np.ndarray:
         arr = np.asarray(values, dtype=object)
         if arr.ndim == 1:
             arr = arr[np.newaxis, :]
         if arr.ndim != 2:
             raise ValueError("Preparation operational equivalences must have shape (N_prep, X) or (X,).")
-        if arr.shape[1] != self.X_cardinality:
+        if arr.shape[1] != int(x_cardinality):
             raise ValueError(
                 "Preparation operational equivalences have incompatible X dimension: "
-                f"got {arr.shape[1]}, expected {self.X_cardinality}."
+                f"got {arr.shape[1]}, expected {int(x_cardinality)}."
             )
         return arr
 
+    def _normalize_prep_opeq_array(self, values: object) -> np.ndarray:
+        return self._normalize_prep_opeq_array_for_x(values, x_cardinality=self.X_cardinality)
+
     @staticmethod
     def _to_symbolic_array(values: object) -> np.ndarray:
+        arr = np.asarray(values, dtype=object)
+        out = np.empty(arr.shape, dtype=object)
+        for idx, value in np.ndenumerate(arr):
+            out[idx] = sp.sympify(value)
+        return out
+
+    @staticmethod
+    def _simplify_symbolic_array(values: object) -> np.ndarray:
         arr = np.asarray(values, dtype=object)
         out = np.empty(arr.shape, dtype=object)
         for idx, value in np.ndenumerate(arr):
@@ -569,7 +630,15 @@ class ContextualityScenario:
         representation: Literal["numeric", "symbolic"],
     ) -> str:
         if representation == "numeric":
-            return np.array2string(np.asarray(matrix, dtype=float), precision=precision, suppress_small=True)
+            return np.array2string(
+                np.asarray(matrix, dtype=float),
+                formatter={
+                    "float_kind": lambda value: ContextualityScenario._format_numeric_entry(
+                        value,
+                        precision=precision,
+                    )
+                },
+            )
 
         return ContextualityScenario._format_symbolic_matrix(matrix, precision=precision)
 
@@ -599,7 +668,7 @@ class ContextualityScenario:
 
     @staticmethod
     def _format_symbolic_entry(entry: object, precision: int) -> str:
-        expr = sp.simplify(sp.sympify(entry))
+        expr = sp.sympify(entry)
 
         if expr.is_Rational is True:
             return str(expr)
@@ -660,7 +729,7 @@ class ContextualityScenario:
 
         out: list[list[object]] = []
         for y in range(self.Y_cardinality):
-            count = int(self._b_cardinality_per_y[y])
+            count = int(self.__b_cardinality_per_y[y])
             out.append([eq[y, b] for b in range(count)])
         return out
 

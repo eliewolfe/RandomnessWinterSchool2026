@@ -102,7 +102,7 @@ The default dephasing target is `x`-independent at fixed `y`:
 
 - `D(b|x,y) = mean_x p(b|x,y)`.
 
-### 3) Eve LP layer (`contextualityqkd/randomness.py`)
+### 3) Eve LP layer (`contextualityqkd/randomness_lp.py`)
 
 Eve's Bob-guessing LP is solved per `y` with hotstart reuse:
 
@@ -110,11 +110,12 @@ Eve's Bob-guessing LP is solved per `y` with hotstart reuse:
 - constraints enforce compatibility with observed `p(b|x,y)` and all OPEQs,
 - output is `P_E^guess(B|y,key)` for each `y`.
 
-Entropy helper functions live here:
+The LP backend solves for `P_E^guess(B|y,key)` only; entropy transforms now live in
+`ContextualityProtocol` static methods:
 
-- `min_entropy(p_guess) = -log2(p_guess)`
-- `reverse_fano_bound(p_guess)` (lower bound on Shannon entropy)
-- `binary_entropy(p)`
+- `ContextualityProtocol.min_entropy(p_guess) = -log2(p_guess)`
+- `ContextualityProtocol.reverse_fano_bound(p_guess)` (lower bound on Shannon entropy)
+- `ContextualityProtocol.binary_entropy(p)`
 
 ### 4) Protocol layer (`contextualityqkd/protocol.py`)
 
@@ -219,7 +220,7 @@ scenario.print_contextuality_measures()
 
 ## Demo Guide
 
-This repository keeps four QKD demos, all built around `ContextualityProtocol`.
+This repository keeps five QKD demos, all built around `ContextualityProtocol`.
 
 ### 1) `qkd_hexagon_projective.py`
 
@@ -232,7 +233,20 @@ This repository keeps four QKD demos, all built around `ContextualityProtocol`.
   - Alice has deterministic knowledge on key-eligible pairs,
   - Eve's LP bound and key-rate accounting are easy to inspect.
 
-### 2) `qkd_cabello_18ray.py`
+### 2) `qkd_xz_ring_8state.py`
+
+- **System**: 8 uniformly spaced pure states on the qubit `xz` great-circle.
+- **Preparations**: 8.
+- **Measurements**: 4 binary projective measurements from opposite state/effect pairs.
+- **Two analyses shown**:
+  - `where_key[y]` equals preparations appearing as effects in measurement `y`,
+  - `where_key[y]` equals all preparations except those unbiased for measurement `y` (6 admissible per `y`).
+- **What it teaches**:
+  - same physical scenario can support multiple key-selection protocols,
+  - throughput/security tradeoff from changing `where_key`,
+  - automatic identification of unbiased states from `p(b|x,y)`.
+
+### 3) `qkd_cabello_18ray.py`
 
 - **System**: Cabello 18-ray Kochen-Specker set.
 - **Preparations**: 18 rays.
@@ -243,7 +257,7 @@ This repository keeps four QKD demos, all built around `ContextualityProtocol`.
   - nontrivial OPEQ structure discovered from data,
   - protocol-level masking of `(x,y)` metrics becomes important for readability.
 
-### 3) `qkd_peres_24ray.py`
+### 4) `qkd_peres_24ray.py`
 
 - **System**: Peres 24 rays grouped into 6 disjoint 4-ray bases.
 - **Preparations**: 24.
@@ -254,7 +268,7 @@ This repository keeps four QKD demos, all built around `ContextualityProtocol`.
   - high per-key-run rate can coexist with low key-generation probability,
   - why "bits per key run" and "bits per experimental run" are both needed.
 
-### 4) `qkd_porac_3_2.py`
+### 5) `qkd_porac_3_2.py`
 
 - **System**: `(3,2)`-PORAC qubit construction.
 - **Preparations**: 8 (three input bits encoded into one index `x`).
@@ -310,7 +324,7 @@ Common protocol print helpers:
 
 - `contextualityqkd/scenario.py`: validated Bob-outcome scenario container
 - `contextualityqkd/contextuality.py`: contextuality LPs and assignment-ray machinery
-- `contextualityqkd/randomness.py`: Eve LP backend + entropy helpers
+- `contextualityqkd/randomness_lp.py`: Eve LP backend
 - `contextualityqkd/protocol.py`: protocol metrics/reporting built on a scenario
 - `contextualityqkd/demos/`: four kept QKD demos + `run_all.py`
 - `tests/`: scenario/protocol unit tests
