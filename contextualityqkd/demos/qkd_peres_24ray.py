@@ -63,7 +63,6 @@ def main() -> None:
     )
     protocol = ContextualityProtocol(scenario, where_key=measurement_indices)
 
-    print("\nSymbolic probability table p(b|x,y):")
     scenario.print_probabilities(as_p_b_given_x_y=True, precision=3, representation="symbolic")
     scenario.print_operational_equivalences(precision=3, representation="symbolic")
     protocol.print_alice_guessing_metrics()
@@ -71,6 +70,13 @@ def main() -> None:
     protocol.print_eve_guessing_metrics_lp()
     protocol.print_eve_uncertainty_metrics_reverse_fano_lp()
     protocol.print_key_rate_summary_reverse_fano_lp()
+
+    auto_protocol = ContextualityProtocol(
+        scenario,
+        where_key="Automatic",
+        optimize_verbose=True,
+    )
+    auto_protocol.print_where_key_optimization_best_stage(leading_newline=True)
 
     scenario.print_contextuality_measures(precision=3)
 

@@ -466,15 +466,28 @@ class ContextualityScenario:
         as_p_b_given_x_y: bool = True,
         precision: int = 6,
         representation: Literal["numeric", "symbolic"] = "numeric",
+        *,
+        header: bool = True,
+        leading_newline: bool = True,
     ) -> None:
         """Print formatted probabilities."""
-        print(
-            self.format_probabilities(
-                as_p_b_given_x_y=as_p_b_given_x_y,
-                precision=precision,
-                representation=representation,
-            )
+        body = self.format_probabilities(
+            as_p_b_given_x_y=as_p_b_given_x_y,
+            precision=precision,
+            representation=representation,
         )
+        prefix = "\n" if leading_newline else ""
+        if not header:
+            print(prefix + body)
+            return
+
+        rep_label = "Numeric" if representation == "numeric" else "Symbolic"
+        if as_p_b_given_x_y:
+            title = f"{rep_label} probability table p(b|x,y):"
+        else:
+            title = f"{rep_label} probability entries p(b|x,y):"
+        print(prefix + title)
+        print(body)
 
     def print_operational_equivalences(
         self,
@@ -529,7 +542,7 @@ class ContextualityScenario:
             "symbolic" if self.has_symbolic_content else "numeric"
         )
         print("\nData table p(b|x,y):")
-        self.print_probabilities(as_p_b_given_x_y=True, representation=representation)
+        self.print_probabilities(as_p_b_given_x_y=True, representation=representation, header=False)
         print("\nMeasurement operational equivalences:")
         self.print_measurement_operational_equivalences(representation=representation)
 
