@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import warnings
+
 import numpy as np
 import sympy as sp
 
@@ -208,16 +210,30 @@ def _independent_rows_numpy(mat: np.ndarray, atol: float) -> np.ndarray:
 
 def _enumerate_cone_extremal_rays_cdd(equalities: np.ndarray, atol: float) -> np.ndarray:
     """Enumerate extremal rays with CDD for ``{x >= 0, A x = 0}``."""
-    from .extremal_finders import cone_h_to_v_cdd
+    from .extremal_finders import cone_h_to_v_cdd, cone_h_to_v_mosek
 
     eq = select_linearly_independent_rows(equalities, atol=atol, method="numpy")
+    eq = np.where(np.abs(eq) <= atol, 0.0, eq)
     num_vars = eq.shape[1]
     A_ineq = np.eye(num_vars, dtype=float)
     rays, _ = cone_h_to_v_cdd(A_ineq=A_ineq, A_eq=eq, atol=atol)
     rays = np.asarray(rays, dtype=float)
-    if rays.size == 0:
-        raise RuntimeError("No extremal rays found for assignment cone.")
-    return rays
+    if rays.size:
+        return rays
+
+    # CDD can occasionally return an empty ray set on near-degenerate real-valued
+    # inputs. Retry with MOSEK before concluding the cone is trivial.
+    rays_fallback, _ = cone_h_to_v_mosek(A_ineq=A_ineq, A_eq=eq, atol=atol, certify_with_mosek=True)
+    rays_fallback = np.asarray(rays_fallback, dtype=float)
+    if rays_fallback.size:
+        warnings.warn(
+            "CDD returned no extremal rays for assignment cone; using MOSEK fallback rays.",
+            RuntimeWarning,
+            stacklevel=2,
+        )
+        return rays_fallback
+
+    raise RuntimeError("No extremal rays found for assignment cone (CDD and MOSEK backends).")
 
 
 def _enumerate_cone_extremal_rays_mosek(equalities: np.ndarray, atol: float) -> np.ndarray:
