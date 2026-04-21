@@ -21,9 +21,9 @@ from contextualityqkd.scenario import ContextualityScenario
 
 
 
-NUM_MEAS = 6
-NUM_STATES = 24
-GOOD_GUESS_THRESHOLD = 2.0 / 3.0
+NUM_MEAS = 8
+NUM_STATES = 16
+# GOOD_GUESS_THRESHOLD = 2.0 / 3.0
 
 def _validate_configuration(num_states: int, num_meas: int) -> None:
     if int(num_states) < 4:
