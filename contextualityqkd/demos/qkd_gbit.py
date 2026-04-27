@@ -45,7 +45,7 @@ print("\n")
 
 scenario = GPTContextualityScenario(
     gpt_states=states,
-    gpt_effects=effects,
+    gpt_effects=quantum_effects,
     measurement_indices=[(0, 2), (1, 3)],
     verbose=True)
 

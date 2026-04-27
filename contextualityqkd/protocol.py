@@ -9,7 +9,7 @@ from typing import Literal, Sequence
 
 import numpy as np
 
-from .randomness_lp import _solve_eve_guess_bob_by_y_lp_hotstart
+from .randomness_lp import _solve_eve_guess_key_by_y_lp_hotstart
 from .scenario import ContextualityScenario
 
 
@@ -504,7 +504,7 @@ class ContextualityProtocol:
 
     @cached_property
     def alice_guess_bob_by_xy(self) -> np.ndarray:
-        """Alice correct-guess probability table ``max_b p(b|x,y)`` with shape ``(X,Y)``."""
+        """Bob best guess probability table ``max_b p(b|x,y)`` with shape ``(X,Y)``."""
         table = np.zeros((self.scenario.X_cardinality, self.scenario.Y_cardinality), dtype=float)
         data = self.scenario.data_numeric
         b_counts = self.scenario.b_cardinality_per_y
@@ -577,10 +577,10 @@ class ContextualityProtocol:
         return float(total / float(self.key_pair_count_total))
 
     @cached_property
-    def eve_guess_bob_by_y_lp(self) -> np.ndarray:
+    def eve_guess_key_by_y_lp(self) -> np.ndarray:
         """Eve LP-optimal Bob-guessing probabilities per y (NaN for empty key rows)."""
         return np.asarray(
-            _solve_eve_guess_bob_by_y_lp_hotstart(
+            _solve_eve_guess_key_by_y_lp_hotstart(
                 scenario=self.scenario,
                 where_key=self.where_key,
             ),
@@ -590,13 +590,13 @@ class ContextualityProtocol:
     @cached_property
     def eve_guess_bob_average_y_lp(self) -> float:
         """Uniform average of Eve LP guess probabilities over non-empty y rows."""
-        return float(self._average_over_y(self.eve_guess_bob_by_y_lp, y_distribution=None, skip_nan=True))
+        return float(self._average_over_y(self.eve_guess_key_by_y_lp, y_distribution=None, skip_nan=True))
 
     @cached_property
     def eve_uncertainty_bob_min_entropy_by_y_lp(self) -> np.ndarray:
         """Eve min-entropy lower-bound vector from LP guessing probabilities."""
-        out = np.full_like(self.eve_guess_bob_by_y_lp, np.nan, dtype=float)
-        for y, value in enumerate(self.eve_guess_bob_by_y_lp):
+        out = np.full_like(self.eve_guess_key_by_y_lp, np.nan, dtype=float)
+        for y, value in enumerate(self.eve_guess_key_by_y_lp):
             if not np.isfinite(value) or value <= 0.0:
                 continue
             out[y] = float(self.min_entropy(float(value)))
@@ -616,8 +616,8 @@ class ContextualityProtocol:
     @cached_property
     def eve_uncertainty_bob_reverse_fano_by_y_lp(self) -> np.ndarray:
         """Eve reverse-Fano entropy lower-bound vector from LP guessing probabilities."""
-        out = np.full_like(self.eve_guess_bob_by_y_lp, np.nan, dtype=float)
-        for y, value in enumerate(self.eve_guess_bob_by_y_lp):
+        out = np.full_like(self.eve_guess_key_by_y_lp, np.nan, dtype=float)
+        for y, value in enumerate(self.eve_guess_key_by_y_lp):
             if not np.isfinite(value) or value <= 0.0:
                 continue
             out[y] = float(self.reverse_fano_bound(float(value)))
@@ -764,7 +764,7 @@ class ContextualityProtocol:
         lines = [
             "Eve LP guessing metrics:",
             "P_E^guess(B|y,key) (LP):",
-            self._format_numeric_array(self.eve_guess_bob_by_y_lp, precision=precision_vector),
+            self._format_numeric_array(self.eve_guess_key_by_y_lp, precision=precision_vector),
             "P_E^guess(B|Y,key) (LP) = "
             f"{ContextualityScenario.format_numeric(self.eve_guess_bob_average_y_lp, precision=precision_scalar)}",
         ]

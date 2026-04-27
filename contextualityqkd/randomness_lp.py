@@ -129,7 +129,7 @@ def _build_bob_single_model_lp_components(
     )
 
 
-def _solve_eve_guess_bob_by_y_lp_hotstart(
+def _solve_eve_guess_key_by_y_lp_hotstart(
     scenario: ContextualityScenario,
     where_key: Sequence[Sequence[int]],
 ) -> np.ndarray:
@@ -166,8 +166,9 @@ def _solve_eve_guess_bob_by_y_lp_hotstart(
         coeffs: dict[int, float] = {}
         b_count = int(b_cardinality_per_y[y])
         for x in x_row.tolist():
+            k = scenario.key_selection_by_xy
             for b in range(b_count):
-                idx = int(var_index(x, y, b, b))
+                idx = int(var_index(x, y, b, k[x,y]))
                 coeffs[idx] = coeffs.get(idx, 0.0) + weight
 
         idx = np.asarray(list(coeffs.keys()), dtype=int)

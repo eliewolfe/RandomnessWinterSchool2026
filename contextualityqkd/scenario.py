@@ -797,3 +797,13 @@ class ContextualityScenario:
 
         positive = probs > 0.0
         return float(-np.sum(probs[positive] * np.log2(probs[positive])))
+    
+    @cached_property
+    def key_selection_by_xy(self) -> np.ndarray:
+        table = np.empty((self.X_cardinality, self.Y_cardinality), dtype=int)
+        data = self.data_numeric
+        b_counts = self.b_cardinality_per_y
+        for x, y in np.ndindex(self.X_cardinality, self.Y_cardinality):
+            b_count = int(b_counts[y])
+            table[x, y] = int(np.argmax(data[x, y, :b_count]))
+        return table
