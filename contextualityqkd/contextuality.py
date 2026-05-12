@@ -48,26 +48,19 @@ def preparation_assignment_extremals(
 ) -> np.ndarray:
     """Enumerate extremal preparation-assignment rays via CDD.
 
-    The preparation-assignment cone is defined over variables ``p(x,a)``:
-    - ``p(x,a) >= 0`` for all ``x,a``
+    The preparation-assignment cone is defined over variables ``p(x)``:
+    - ``p(x) >= 0`` for all ``x``
     - every preparation OPEQ holds pointwise:
-      ``sum_{x,a} c[x,a] p(x,a) = 0``
+      ``sum_x c[x] p(x) = 0``
     """
     tol = scenario.atol if atol is None else float(atol)
     rays_flat = _assignment_extremal_rays(
         opeq_array=scenario.opeq_preps_numeric,
         num_settings=scenario.X_cardinality,
-        num_outcomes=scenario.A_cardinality,
+        num_outcomes=1,
         atol=tol,
     )
-    rays = rays_flat.reshape(-1, scenario.X_cardinality, scenario.A_cardinality)
-    _assert_zero_on_invalid_support(
-        rays=rays,
-        valid_mask=scenario.valid_a_mask,
-        atol=tol,
-        label="preparation assignment extremals",
-    )
-    return rays
+    return rays_flat.reshape(-1, scenario.X_cardinality)
 
 
 def effect_assignment_extremals(
@@ -260,7 +253,7 @@ def _solve_dephasing_robustness_lp(
 
     coeff_r = -(
         dephasing_target - data
-    ).transpose(0, 2, 1, 3).reshape(num_rows, 1)
+    ).reshape(num_rows, 1)
     coeff_matrix = np.hstack([coeff_weights, coeff_r])
     coeff_matrix = np.where(np.abs(coeff_matrix) <= atol, 0.0, coeff_matrix)
 
@@ -270,7 +263,7 @@ def _solve_dephasing_robustness_lp(
     asub = sparse.indices.astype(np.int32, copy=False)
     aval = sparse.data.astype(np.float64, copy=False)
 
-    rhs = data.transpose(0, 2, 1, 3).reshape(num_rows).astype(np.float64, copy=False)
+    rhs = data.reshape(num_rows).astype(np.float64, copy=False)
     c = np.zeros(num_vars, dtype=np.float64)
     c[-1] = 1.0
 
@@ -353,7 +346,7 @@ def _solve_noncontextual_fraction_lp(
     asub = sparse.indices.astype(np.int32, copy=False)
     aval = sparse.data.astype(np.float64, copy=False)
 
-    rhs_data = data.transpose(0, 2, 1, 3).reshape(num_rows_data).astype(np.float64, copy=False)
+    rhs_data = data.reshape(num_rows_data).astype(np.float64, copy=False)
     rhs_mass = np.zeros(num_rows_mass, dtype=np.float64)
 
     bkc = [mosek.boundkey.up] * num_rows_data + [mosek.boundkey.fx] * num_rows_mass
@@ -410,29 +403,29 @@ def _solve_noncontextual_fraction_lp(
 def _assignment_product_blocks(
     prep_extremals: np.ndarray,
     effect_extremals: np.ndarray,
-    data_shape: tuple[int, int, int, int],
+    data_shape: tuple[int, int, int],
     atol: float,
 ) -> tuple[int, int, np.ndarray, np.ndarray]:
     """Build ray-product coefficient blocks for data and per-(x,y) mass rows."""
-    num_prep_vertices, num_x, num_a = prep_extremals.shape
+    num_prep_vertices, num_x = prep_extremals.shape
     num_effect_vertices, num_y, num_b = effect_extremals.shape
-    if data_shape != (num_x, num_y, num_a, num_b):
+    if data_shape != (num_x, num_y, num_b):
         raise ValueError("data shape is inconsistent with extremal assignment dimensions.")
 
     num_weights = num_prep_vertices * num_effect_vertices
-    num_rows_data = num_x * num_y * num_a * num_b
+    num_rows_data = num_x * num_y * num_b
 
-    prep_flat = prep_extremals.reshape(num_prep_vertices, num_x * num_a)
+    prep_flat = prep_extremals.reshape(num_prep_vertices, num_x)
     effect_flat = effect_extremals.reshape(num_effect_vertices, num_y * num_b)
 
-    # Rows indexed by (x,a,y,b), matching existing robustness flattening.
+    # Rows indexed by (x,y,b).
     coeff_weights = (
-        np.einsum("ip,jq->ijpq", prep_flat, effect_flat, optimize=True)
+        np.einsum("ix,jq->ijxq", prep_flat, effect_flat, optimize=True)
         .reshape(num_weights, num_rows_data)
         .T
     )
 
-    prep_masses = prep_extremals.sum(axis=2)  # (N_prep, X)
+    prep_masses = prep_extremals  # (N_prep, X)
     effect_masses = effect_extremals.sum(axis=2)  # (N_eff, Y)
     mass_weights = (
         np.einsum("ix,jy->ijxy", prep_masses, effect_masses, optimize=True)
@@ -474,29 +467,25 @@ def _extract_optimal_solution_vector(
 def _default_dephasing_target(data: np.ndarray, atol: float) -> np.ndarray:
     """Default dephasing target ``D`` built from data marginals.
 
-    Uses ``D(a,b|x,y)=P(a|x) * Q(b|y)`` where:
-    - ``P(a|x)`` is averaged over y from the input table,
-    - ``Q(b|y)`` is averaged over x from ``P(b|x,y)``.
+    Uses ``D(b|x,y)=Q(b|y)`` where ``Q(b|y)`` is averaged over x from ``p(b|x,y)``.
     """
-    num_x, _num_y, _num_a, _num_b = data.shape
-    p_a_given_x = data.sum(axis=3).mean(axis=1)
-    q_b_given_y = data.sum(axis=(0, 2)) / float(num_x)
-    p_a_given_x = _normalize_rows(p_a_given_x, atol=atol)
+    num_x, _num_y, _num_b = data.shape
+    q_b_given_y = data.sum(axis=0) / float(num_x)
     q_b_given_y = _normalize_rows(q_b_given_y, atol=atol)
-    return p_a_given_x[:, None, :, None] * q_b_given_y[None, :, None, :]
+    return np.broadcast_to(q_b_given_y[np.newaxis, :, :], data.shape).copy()
 
 
 def _validate_dephasing_target(
     target: np.ndarray,
-    shape: tuple[int, int, int, int],
+    shape: tuple[int, int, int],
     atol: float,
 ) -> np.ndarray:
     if target.shape != shape:
         raise ValueError(f"dephasing_target must have shape {shape}.")
     if np.any(target < -atol):
         raise ValueError("dephasing_target contains negative entries.")
-    if not np.allclose(target.sum(axis=(2, 3)), 1.0, atol=atol):
-        raise ValueError("Each (x,y) in dephasing_target must sum to 1 over (a,b).")
+    if not np.allclose(target.sum(axis=2), 1.0, atol=atol):
+        raise ValueError("Each (x,y) in dephasing_target must sum to 1 over b.")
     return np.asarray(target, dtype=float)
 
 

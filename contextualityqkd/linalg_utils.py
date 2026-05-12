@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import warnings
+
 import numpy as np
+import sympy as sp
 
 
 def null_space_basis(
@@ -100,12 +103,7 @@ def _null_space_scipy(mat: np.ndarray, atol: float) -> np.ndarray:
 
 def _null_space_sympy(mat: object, atol: float) -> np.ndarray:
     """Compute a null-space row basis using SymPy with NumPy-SVD validation."""
-    try:
-        import sympy
-    except ImportError as exc:  # pragma: no cover
-        raise ImportError("sympy is required for method='sympy'.") from exc
-
-    sym_mat = _to_sympy_matrix_preserving_symbols(mat, atol=atol, sympy_module=sympy)
+    sym_mat = _to_sympy_matrix_preserving_symbols(mat)
     num_cols = int(sym_mat.shape[1])
 
     numpy_basis: np.ndarray | None = None
@@ -159,47 +157,17 @@ def _null_space_sympy(mat: object, atol: float) -> np.ndarray:
     return basis_rows
 
 
-def _to_sympy_matrix_preserving_symbols(matrix: object, atol: float, sympy_module: object) -> object:
+def _to_sympy_matrix_preserving_symbols(matrix: object) -> object:
     """Build a SymPy matrix while preserving symbolic entries."""
-    if isinstance(matrix, sympy_module.MatrixBase):
+    if isinstance(matrix, sp.MatrixBase):
         if len(matrix.shape) != 2:
             raise ValueError("matrix must be 2D.")
-        return sympy_module.Matrix(
-            [
-                [
-                    _sympy_chop_small_numeric(matrix[i, j], atol=atol, sympy_module=sympy_module)
-                    for j in range(matrix.shape[1])
-                ]
-                for i in range(matrix.shape[0])
-            ]
-        )
+        return sp.Matrix(matrix)
 
     arr = np.asarray(matrix, dtype=object)
     if arr.ndim != 2:
         raise ValueError("matrix must be 2D.")
-    return sympy_module.Matrix(
-        [
-            [
-                _sympy_chop_small_numeric(arr[i, j], atol=atol, sympy_module=sympy_module)
-                for j in range(arr.shape[1])
-            ]
-            for i in range(arr.shape[0])
-        ]
-    )
-
-
-def _sympy_chop_small_numeric(value: object, atol: float, sympy_module: object) -> object:
-    """Set tiny numeric entries to exact zero while leaving symbolic entries untouched."""
-    entry = sympy_module.sympify(value)
-    if entry.is_zero is True:
-        return sympy_module.Integer(0)
-    if entry.is_number and entry.free_symbols == set():
-        try:
-            if abs(complex(entry.evalf())) <= float(atol):
-                return sympy_module.Integer(0)
-        except TypeError:
-            pass
-    return entry
+    return sp.Matrix(arr.tolist())
 
 
 def _independent_rows_numpy(mat: np.ndarray, atol: float) -> np.ndarray:
@@ -242,16 +210,30 @@ def _independent_rows_numpy(mat: np.ndarray, atol: float) -> np.ndarray:
 
 def _enumerate_cone_extremal_rays_cdd(equalities: np.ndarray, atol: float) -> np.ndarray:
     """Enumerate extremal rays with CDD for ``{x >= 0, A x = 0}``."""
-    from .extremal_finders import cone_h_to_v_cdd
+    from .extremal_finders import cone_h_to_v_cdd, cone_h_to_v_mosek
 
     eq = select_linearly_independent_rows(equalities, atol=atol, method="numpy")
+    eq = np.where(np.abs(eq) <= atol, 0.0, eq)
     num_vars = eq.shape[1]
     A_ineq = np.eye(num_vars, dtype=float)
     rays, _ = cone_h_to_v_cdd(A_ineq=A_ineq, A_eq=eq, atol=atol)
     rays = np.asarray(rays, dtype=float)
-    if rays.size == 0:
-        raise RuntimeError("No extremal rays found for assignment cone.")
-    return rays
+    if rays.size:
+        return rays
+
+    # CDD can occasionally return an empty ray set on near-degenerate real-valued
+    # inputs. Retry with MOSEK before concluding the cone is trivial.
+    rays_fallback, _ = cone_h_to_v_mosek(A_ineq=A_ineq, A_eq=eq, atol=atol, certify_with_mosek=True)
+    rays_fallback = np.asarray(rays_fallback, dtype=float)
+    if rays_fallback.size:
+        warnings.warn(
+            "CDD returned no extremal rays for assignment cone; using MOSEK fallback rays.",
+            RuntimeWarning,
+            stacklevel=2,
+        )
+        return rays_fallback
+
+    raise RuntimeError("No extremal rays found for assignment cone (CDD and MOSEK backends).")
 
 
 def _enumerate_cone_extremal_rays_mosek(equalities: np.ndarray, atol: float) -> np.ndarray:

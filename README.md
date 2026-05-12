@@ -1,492 +1,242 @@
-# Randomness Winter School 2026
+# contextualityqkd: Bob-Outcome QKD from Contextuality
 
-`contextualityqkd` is a research-oriented Python package for:
+`contextualityqkd` analyzes prepare-and-measure QKD protocols where:
 
-- building prepare-and-measure contextuality scenarios from quantum or GPT descriptions,
-- discovering or validating operational equivalences (OPEQs),
-- quantifying certified randomness through MOSEK linear programs, and
-- quantifying contextuality via robustness to dephasing noise.
+- Alice chooses preparation `x`
+- Bob chooses measurement `y` and gets outcome `b`
+- Eve is constrained by the observed behavior `p(b|x,y)` plus operational equivalences (OPEQs)
 
-The package is organized around one central object (`ContextualityScenario`) and two optimization workflows:
+The package separates:
 
-1. **Randomness certification** (Eve guessing LP).
-2. **Contextuality quantification** (dephasing robustness LP after extremal-ray enumeration).
+1. **Scenario construction** (`ContextualityScenario`, `GPTContextualityScenario`, `QuantumContextualityScenario`)
+2. **Protocol analysis** (`ContextualityProtocol`)
 
-## Intended Use Cases
+This separation is central: one scenario can be reused for many protocol choices (`where_key`).
 
-This package is intended for users who want to:
+## Current API At A Glance
 
-- study device-independent or semi-device-independent randomness from contextuality constraints,
-- move between quantum matrix descriptions and GPT-vector descriptions,
-- infer measurement contexts from a flat effect list,
-- inspect and manipulate operational equivalences directly, and
-- compare different scenarios through a contextuality metric (`r*`, robustness to dephasing).
+### Core classes
 
-## Installation
+- `ContextualityScenario`: generic validated Bob-outcome behavior container
+- `GPTContextualityScenario`: scenario from GPT vectors/states/effects
+- `QuantumContextualityScenario`: scenario from quantum matrices, converted to GPT internally
+- `ContextualityProtocol`: Alice/Eve metrics and key-rate analysis on top of a scenario
 
-### Recommended (Conda)
+### Main constructor/factory pipelines
 
-```bash
-conda create -n py13 python=3.13 -y
-conda activate py13
-conda install -y numpy scipy sympy
-pip install mosek pycddlib
-```
+- Generic scenario from data:
+  - `ContextualityScenario(data, opeq_preps=None, opeq_meas=None, atol=..., verbose=...)`
+- GPT scenario (direct):
+  - `GPTContextualityScenario(gpt_states=..., gpt_effects=..., measurement_indices=..., ...)`
+- GPT factory helpers:
+  - `GPTContextualityScenario.from_xz_ring(...)`
+  - `GPTContextualityScenario.from_integer_rays(...)`
+- Quantum scenario (direct):
+  - `QuantumContextualityScenario(quantum_states=..., quantum_effects=..., ...)`
+- Quantum factory helper:
+  - `QuantumContextualityScenario.from_quantum_states_effects(...)`
 
-### Alternative (pip-only)
+## Protocol Construction Pipelines
 
-```bash
-python -m venv .venv
-. .venv/Scripts/activate  # Windows PowerShell: .venv\Scripts\Activate.ps1
-pip install -r requirements.txt
-```
+## 1) Manual `where_key` protocol
 
-Notes:
-
-- `mosek` is required for LP solves (randomness and robustness). You need a working MOSEK license.
-- `pycddlib` is used by default for extremal-ray enumeration in contextuality robustness.
-- The package also includes MOSEK-based cone conversion/enumeration utilities in `extremal_finders.py`.
-
-## Quick Start
-
-Run split demos from `contextualityqkd/demos/`:
-
-```bash
-python -m contextualityqkd.demos.randomness_qubit_z_x_xplusz
-python -m contextualityqkd.demos.qkd_qubit_z_x_xplusz
-python -m contextualityqkd.demos.qkd_porac_3_2
-```
-
-Or run all demos serially:
-
-```bash
-python -m contextualityqkd.demos.run_all
-```
-
-## Conceptual Pipeline
-
-High-level flow:
-
-1. Prepare data as `P(a,b|x,y)` and OPEQs, or construct these from quantum/GPT inputs.
-2. Build a `ContextualityScenario`.
-3. Run one or both analyses through scenario methods:
-   - `scenario.compute_eve_guessing_table(...)`
-   - `scenario.compute_keyrate_table(...)`
-   - `scenario.compute_dephasing_robustness(...)`
-   - `scenario.compute_contextual_fraction(...)`
-
-## Data and OPEQ Conventions
-
-### Behavior table convention
-
-The package uses:
-
-- `data[x, y, a, b] = P(a,b|x,y)`
-- padded shape `(X, Y, A_max, B_max)` internally
-
-Indices:
-
-- `x`: preparation setting
-- `y`: measurement setting
-- `a`: source/preparation outcome
-- `b`: measurement outcome
-
-Input options:
-
-- dense input with explicit padded shape `(X, Y, A_max, B_max)`, or
-- ragged nested lists `data[x][y][a][b]` under the model `A=A(x)`, `B=B(y)`.
-
-When ragged input is used, the package pads with zeros and tracks
-`a_cardinality_per_x` and `b_cardinality_per_y`.
-
-Normalization requirement:
-
-- for each `(x,y)`, `sum_{a,b} P(a,b|x,y) = 1`.
-
-Special case:
-
-- if `A = 1`, this reduces to a single-outcome-per-setting source behavior 
-  a.k.a. controlled preperations, and is often read as `p(b|x,y)`.
-
-### Operational-equivalence convention
-
-Preparation OPEQs:
-
-- shape `(N_prep, X, A_max)` (or `(X,A_max)` for a single OPEQ) after padding,
-- each OPEQ coefficient array `c[x,a]` must satisfy:
-  - `sum_{x,a} c[x,a] P(a,b|x,y) = 0` for all `(y,b)`.
-
-Measurement OPEQs:
-
-- shape `(N_meas, Y, B_max)` (or `(Y,B_max)` for a single OPEQ) after padding,
-- each OPEQ coefficient array `d[y,b]` must satisfy:
-  - `sum_{y,b} d[y,b] P(a,b|x,y) = 0` for all `(x,a)`.
-
-For ragged scenarios, padded coordinates are always enforced as structural zeros by
-automatically injected OPEQ rows.
-
-These are exactly the linear constraints used by the LPs.
-
-## Why Constructors from Quantum and GPT Inputs?
-
-In practice, users often start from:
-
-- quantum objects (density matrices and effects), or
-- GPT vectors (states/effects in an operational vector space),
-
-not from a fully assembled `(X,Y,A,B)` table with explicit OPEQs.
-
-The constructors automate:
-
-1. conversion from input representation to GPT vectors,
-2. measurement-context detection from flat effect lists,
-3. behavior table construction `P(a,b|x,y)`, and
-4. OPEQ discovery from nullspaces.
-
-This reduces boilerplate and ensures consistent conventions.
-
-## Core API by Module
-
-### `scenario.py`
-
-`ContextualityScenario` is the canonical container used by all optimization routines.
-
-Core responsibilities:
-
-- stores validated `data`, `opeq_preps`, `opeq_meas`,
-- supports ragged inputs and internally pads to dense arrays,
-- discovers missing OPEQs (nullspace-based),
-- validates provided OPEQs,
-- exposes cardinalities (`X,Y,A_max,B_max`) plus per-setting cardinalities,
-- exposes validity masks (`valid_a_mask`, `valid_b_mask`, `valid_ab_mask`),
-- offers printing/formatting utilities,
-- computes Alice-side guessing benchmarks:
-  - `alice_optimal_guessing_bob_probability` (cached `(X,Y)` table)
-  - `alice_optimal_average_guessing_bob_probability`
-
-Constructor notes:
-
-- `ContextualityScenario(data=...)` infers per-setting cardinalities from ragged input directly, from trailing-zero support in dense padded arrays, or from masks in dense `numpy.ma.MaskedArray` input.
-
-Important behavior:
-
-- If `verbose=True` and OPEQs are omitted, the class emits warnings that OPEQs are being discovered from data.
-
-### `quantum.py`
-
-Bridges quantum and GPT representations and builds scenarios from either.
-
-Important functions:
-
-- Quantum helpers:
-  - `projector(ket)`
-  - `projector_hs_vector(ket)`
-  - `gell_mann_matrices(d)`
-  - `convert_matrix_list_to_vector_list(...)`
-  - `convert_matrix_to_vector(...)`
-  - `direct_probability_table_from_quantum(...)`
-  - `probability_table_from_quantum_via_gpt(...)`
-- GPT helpers:
-  - `probability_table_from_gpt_vectors(...)` (supports `return_masked`; default auto-masks mixed-cardinality grouped inputs)
-  - `discover_operational_equivalences_from_gpt_objects(...)`
-  - `infer_measurements_from_gpt_effect_set(...)`
-  - `data_table_from_gpt_states_and_effect_set(...)`
-- High-level scenario classes:
-  - `GPTContextualityScenario(...)`
-  - `QuantumContextualityScenario(...)`
-
-Projective fast path:
-
-- `QuantumContextualityScenario(...)` detects when all states/effects are projectors and (if no custom basis/unit effect is supplied) uses a direct Hilbert-Schmidt vectorization path instead of Gell-Mann expansion.
-
-### `randomness.py`
-
-Contains internal MOSEK LP backends for Eve's guessing probability and entropy helpers.
-
-Main backend functions:
-
-- `eve_optimal_guessing_probability(scenario, x, y, guess_who="Bob")`
-- `eve_optimal_average_guessing_probability(scenario, guess_who="Bob")`
-- `analyze_scenario(scenario, guess_who="Bob")` (fills Eve guessing and key-rate tables)
-- `min_entropy(p_guess)`
-
-Notes:
-
-- For user workflows, prefer scenario methods:
-  - `scenario.compute_eve_guessing_table(...)`
-  - `scenario.compute_eve_average_guessing_probability(...)`
-  - `scenario.compute_keyrate_table(...)`
-
-### `contextuality.py`
-
-Contains internal simplex-embeddability workflow, dephasing-robustness, and contextual-fraction LPs.
-
-Main functions:
-
-- `preparation_assignment_extremals(scenario)`
-- `effect_assignment_extremals(scenario)`
-- `assess_simplex_embeddability(scenario, ...)`
-- `contextuality_robustness_to_dephasing(scenario, ...)`
-- `assess_contextual_fraction(scenario, ...)`
-- `noncontextual_fraction(scenario, ...)`
-- `contextual_fraction(scenario, ...)`
-
-Result dataclass:
-
-- `SimplexEmbeddabilityResult` with:
-  - `is_simplex_embeddable`
-  - `dephasing_robustness`
-  - extremals, optional coupling weights, and solver status.
-- `ContextualFractionResult` with:
-  - `noncontextual_fraction`
-  - `contextual_fraction`
-  - extremals, optional coupling weights, and solver status.
-
-Notes:
-
-- For user workflows, prefer scenario methods:
-  - `scenario.compute_dephasing_robustness(...)`
-  - `scenario.compute_contextual_fraction(...)`
-  - `scenario.compute_noncontextual_fraction(...)`
-
-### `linalg_utils.py`
-
-Shared linear algebra utilities:
-
-- `null_space_basis(...)` with methods:
-  - `"sympy"` (default)
-  - `"numpy"`
-  - `"scipy"`
-- `select_linearly_independent_rows(...)`
-- `enumerate_cone_extremal_rays(...)` (CDD or MOSEK backend)
-
-### `extremal_finders.py`
-
-Cone representation conversion with two backends:
-
-- CDD:
-  - `cone_h_to_v_cdd(...)`
-  - `cone_v_to_h_cdd(...)`
-- MOSEK:
-  - `cone_h_to_v_mosek(...)`
-  - `cone_v_to_h_mosek(...)`
-
-Conventions used there:
-
-- H-rep: `A_ineq x >= 0`, `A_eq x = 0`
-- V-rep: `Cone(rays) + Lin(lines)`
-
-## Randomness LP: Physical Idea and Constraints
-
-### Physical interpretation
-
-The Eve LP asks:
-
-- given observed behavior `P(a,b|x,y)` and OPEQs,
-- what is the maximum probability that an adversary Eve can guess a chosen target (`Bob`, `Alice`, or `Both`) at chosen settings?
-
-The LP introduces a tripartite extension `P_t(a,b,e|x,y)` (indexed by target `t` for averaging scenarios).
-
-Eve's guess is encoded as `e` and the objective rewards:
-
-- `e=b` when `guess_who="Bob"` (default),
-- `e=a` when `guess_who="Alice"`,
-- `e=(a,b)` when `guess_who="Both"`.
-
-### Why OPEQ constraints involve grouped parties
-
-Preparation OPEQs constrain what can be signaled from the source side. In the LP they are enforced while grouping Bob+Eve together:
-
-- for each preparation OPEQ `c[x,a]`:
-  - `sum_{x,a} c[x,a] P_t(a,b,e|x,y) = 0` for all `(y,b,e)`.
-
-Measurement OPEQs are dual: they are enforced while grouping Alice+Eve together:
-
-- for each measurement OPEQ `d[y,b]`:
-  - `sum_{y,b} d[y,b] P_t(a,b,e|x,y) = 0` for all `(x,a,e)`.
-
-This is the operational requirement that Eve's side information remains compatible with both sets of observed equivalence relations.
-
-### LP structure
-
-Variables:
-
-- nonnegative `P_t(a,b,e|x,y)`.
-
-Constraints:
-
-1. Data consistency:
-   - `sum_e P_t(a,b,e|x,y) = P(a,b|x,y)`.
-2. Preparation OPEQ constraints (grouping Bob+Eve).
-3. Measurement OPEQ constraints (grouping Alice+Eve).
-
-Objective:
-
-- maximize Eve's success probability at target pair(s):
-  - single-target: one `(x,y)`,
-  - average-target: uniform average across all `(x,y)`.
-
-Outputs:
-
-- `p_guess` in `[0,1]`,
-- convert to min-entropy via `H_min = -log2(p_guess)`.
-
-## Alice Guessing Benchmark
-
-`ContextualityScenario` includes built-in non-LP benchmarks:
-
-- `alice_optimal_guessing_bob_probability`
-- `alice_optimal_average_guessing_bob_probability`
-- `bob_optimal_guessing_alice`
-- `bob_optimal_average_guessing_alice_probability`
-- `largest_joint_probability`
-
-At fixed `(x,y)`, Alice knows `a`, so she can pick best `b` per `a`:
-
-- `sum_a p(a|x,y) max_b p(b|x,y,a)`
-- implemented equivalently as `sum_a max_b P(a,b|x,y)`.
-
-This is useful to contrast internal source-side knowledge with adversarially constrained Eve randomness.
-
-## Robustness to Dephasing: High-Level Algorithm
-
-The contextuality measure implemented is dephasing robustness `r*`:
-
-- smallest `r in [0,1]` such that:
-  - `(1-r) P + r D`
-  - is representable by a noncontextual simplex-embeddable model.
-
-Here `D` is a dephasing target behavior:
-
-- default is built from marginals (`P(a|x)` and averaged `Q(b|y)`),
-- you can also pass a custom `dephasing_target`.
-
-Algorithm steps:
-
-1. Build preparation-assignment cone:
-   - variables `p(x,a) >= 0`, plus preparation OPEQ equalities.
-2. Build effect-assignment cone:
-   - variables `q(y,b) >= 0`, plus measurement OPEQ equalities.
-3. Enumerate extremal rays of both cones (default CDD backend).
-4. Solve one MOSEK LP over nonnegative coupling weights `w_ij` and scalar `r`:
-   - reconstruct dephased behavior from convex combination of ray products,
-   - minimize `r`.
-
-Interpretation used in demo:
-
-- larger `r*` means more contextuality (more dephasing needed to reach noncontextual explainability).
-- `r*` near 0 indicates simplex embeddability already (or nearly) present.
-
-## Contextual Fraction: High-Level Algorithm
-
-The contextual fraction workflow solves for the largest noncontextual subbehavior mass `lambda*`:
-
-- `S(a,b|x,y) = sum_ij w_ij R_ij(a,b|x,y)` where `R_ij` are prep/effect assignment-ray products and `w_ij >= 0`.
-- constraints:
-  - `S(a,b|x,y) <= P(a,b|x,y)` for all entries (subbehavior inequality),
-  - `sum_ab S(a,b|x,y) = lambda` for all `(x,y)` (uniform subnormalization mass).
-- objective: maximize `lambda`.
-
-Outputs:
-
-- `noncontextual_fraction = lambda*`
-- `contextual_fraction = 1 - lambda*`
-- post-solve sanity check verifies `lambda*` is within `[0, 1]` up to tolerance.
-
-Implementation note:
-
-- This is solved directly in the cone-weight representation; no explicit normalized-vertex enumeration is required.
-
-## Demo Guide (`contextualityqkd/demos/*.py`)
-
-Each demo now has its own script:
-
-- Randomness demos:
-  - `contextualityqkd/demos/randomness_qubit_z_x_xplusz.py`
-  - `contextualityqkd/demos/randomness_qubit_xplusz_xminusz.py`
-  - `contextualityqkd/demos/randomness_hexagon_povm.py`
-  - `contextualityqkd/demos/randomness_cabello_18ray.py`
-  - `contextualityqkd/demos/randomness_peres_24ray.py`
-- QKD demos:
-  - `contextualityqkd/demos/qkd_qubit_z_x_xplusz.py`
-  - `contextualityqkd/demos/qkd_qubit_xplusz_xminusz.py`
-  - `contextualityqkd/demos/qkd_hexagon_povm.py`
-  - `contextualityqkd/demos/qkd_cabello_18ray.py`
-  - `contextualityqkd/demos/qkd_peres_24ray.py`
-  - `contextualityqkd/demos/qkd_porac_3_2.py` (PORAC (3,2), Eq. (22)-style reporting)
-- Optional runner:
-  - `python -m contextualityqkd.demos.run_all`
-
-## Minimal Usage Patterns
-
-### 1) Quantum input to randomness
+Use this when you already know the key-eligible preparations for each measurement:
 
 ```python
-from contextualityqkd.quantum import QuantumContextualityScenario
+from contextualityqkd.protocol import ContextualityProtocol
 
-scenario = QuantumContextualityScenario(
-    quantum_states=quantum_states,         # grouped (X,A,d,d) or flat (N,d,d)+indices
-    quantum_effects=effect_set,
-    infer_measurement_indices=True,
-    outcomes_per_measurement=2,
-    verbose=True,
+protocol = ContextualityProtocol(
+    scenario,
+    where_key=measurement_indices,  # one row per y
 )
-
-measurement_indices = scenario.measurement_indices
-p_guess_table = scenario.compute_eve_guessing_table(guess_who="Bob")
-p_guess_target = p_guess_table[0, 0]
 ```
 
-### 2) GPT input to scenario
+## 2) Automatic `where_key` optimization (built in)
+
+Use this to automatically sweep admissible key sets and choose the best stage by reverse-Fano bits per experimental run:
 
 ```python
-from contextualityqkd.quantum import GPTContextualityScenario
+from contextualityqkd.protocol import ContextualityProtocol
 
-scenario = GPTContextualityScenario(
-    gpt_states=gpt_states,              # grouped/ragged or flat + preparation_indices
-    gpt_effects=gpt_effect_set,         # grouped/ragged or flat + measurement_indices
-    infer_measurement_indices=True,     # optional flat-effect inference path
-    outcomes_per_measurement=2,
+protocol = ContextualityProtocol(
+    scenario,
+    where_key="Automatic",  # also accepts "auto", case-insensitive
+    optimize_verbose=True,
 )
-
-measurement_indices = scenario.measurement_indices
 ```
 
-### 3) Randomness metrics
+### Automatic optimizer options
+
+`ContextualityProtocol(..., where_key="Automatic", ...)` supports:
+
+- `optimize_cluster_tolerance` (default `1e-6`)
+- `optimize_cluster_by`
+  - `"threshold_uncertainty"` (default)
+  - `"threshold_alice_guess_bob_probability"`
+- `atol` (protocol tolerance; used for stage-score tie handling)
+- `optimize_tie_break`
+  - `"earliest_optimal_stage"` (default)
+  - `"latest_optimal_stage"`
+
+### Automatic optimization results
+
+When automatic mode is used:
+
+- `protocol.where_key_optimization_result` returns full report dictionary
+- top-level keys include:
+  - `mode`, `objective`, `cluster_by`, `cluster_tolerance`, `tie_tolerance`, `tie_break`, `total_stages`, `stages`, `best_stage`
+- each stage includes:
+  - `stage_index`, `where_key`, `key_counts_by_y`, `is_uniform_key_count`, `uniform_key_count`
+  - `threshold_uncertainty`, `threshold_alice_guess_bob_probability`
+  - `key_generation_probability_per_run`, `bits_per_key_generating_run`, `bits_per_experimental_run`
+
+## Printing Helpers
+
+### Scenario printing
+
+`scenario.print_probabilities(...)` now prints its own header by default (numeric/symbolic), so demos do not need a separate title line for the probability block.
+
+Key methods:
+
+- `scenario.print_probabilities(...)`
+- `scenario.print_operational_equivalences(...)`
+- `scenario.print_contextuality_measures(...)`
+
+### Protocol printing
+
+Key methods:
+
+- `protocol.print_alice_guessing_metrics()`
+- `protocol.print_alice_uncertainty_metrics()`
+- `protocol.print_eve_guessing_metrics_lp()`
+- `protocol.print_eve_uncertainty_metrics_reverse_fano_lp()`
+- `protocol.print_key_rate_summary_reverse_fano_lp()`
+- `protocol.print_where_key_optimization_best_stage(...)`
+
+## Demo Guide (Updated)
+
+All demos live in `contextualityqkd/demos/`.
+
+## `qkd_xz_ring.py`
+
+This demo is now a configurable ring sweep tool (majorly changed from earlier versions).
+
+What it does:
+
+- exposes two top-level knobs:
+  - `NUM_STATES`
+  - `NUM_MEAS`
+- enforces `NUM_STATES % (2 * NUM_MEAS) == 0`
+- builds evenly spaced antipodal deterministic measurement pairs from those settings
+- constructs scenario via `GPTContextualityScenario.from_xz_ring(...)`
+- runs automatic `where_key` optimization with verbose stage logging
+- prints automatic best-stage identification and thresholds
+- prints Alice/Eve metrics and reverse-Fano key-rate summaries for the selected automatic stage
+
+This file is now the main ring exploration demo.
+
+## `qkd_hexagon_projective.py`
+
+What it does:
+
+- builds a 6-state hexagon GPT scenario via `from_xz_ring`
+- runs a manual protocol using deterministic pairs (`where_key=measurement_indices`)
+- runs an additional automatic optimization stage and prints best-stage summary
+
+## `qkd_peres_24ray.py`
+
+What it does:
+
+- builds Peres 24-ray GPT scenario via `from_integer_rays`
+- runs manual basis-aligned key protocol (`where_key=measurement_indices`)
+- runs automatic optimization stage and prints best-stage summary
+
+## `qkd_cabello_18ray.py`
+
+What it does:
+
+- builds Cabello 18-ray GPT scenario via `from_integer_rays`
+- runs manual context-aligned key protocol
+- runs automatic optimization stage and prints best-stage summary
+
+## `qkd_porac_3_2.py`
+
+What it does:
+
+- builds true quantum PORAC scenario via `QuantumContextualityScenario.from_quantum_states_effects`
+- validates discovered preparation-OPEQ subspace against article constraints
+- runs baseline protocol with `where_key=None`
+- runs automatic optimization stage and prints best-stage summary
+
+## Running
+
+Per project instructions, use conda env `py13`.
+
+Example commands:
+
+```powershell
+C:\Users\elupu\miniconda3\Scripts\conda.exe run -n py13 python -m contextualityqkd.demos.qkd_xz_ring
+C:\Users\elupu\miniconda3\Scripts\conda.exe run -n py13 python -m contextualityqkd.demos.qkd_hexagon_projective
+C:\Users\elupu\miniconda3\Scripts\conda.exe run -n py13 python -m contextualityqkd.demos.qkd_peres_24ray
+C:\Users\elupu\miniconda3\Scripts\conda.exe run -n py13 python -m contextualityqkd.demos.qkd_cabello_18ray
+C:\Users\elupu\miniconda3\Scripts\conda.exe run -n py13 python -m contextualityqkd.demos.qkd_porac_3_2
+```
+
+Run tests:
+
+```powershell
+C:\Users\elupu\miniconda3\Scripts\conda.exe run -n py13 python -m unittest discover -s tests -v
+```
+
+## Minimal Example
 
 ```python
 import numpy as np
+from contextualityqkd.protocol import ContextualityProtocol
+from contextualityqkd.quantum import GPTContextualityScenario
 
-p_target = scenario.compute_eve_guessing_table(guess_who="Bob")[0, 0]
-p_avg = scenario.compute_eve_average_guessing_probability(guess_who="Bob")
-hmin = float(-np.log2(p_target))
+measurement_indices = [(0, 3), (1, 4), (2, 5)]
+scenario = GPTContextualityScenario.from_xz_ring(
+    num_states=6,
+    measurement_indices=measurement_indices,
+    verbose=False,
+)
+
+# Automatic protocol sweep + best-stage selection
+protocol = ContextualityProtocol(
+    scenario,
+    where_key="Automatic",
+    optimize_verbose=False,
+    optimize_tie_break="earliest_optimal_stage",
+)
+
+result = protocol.where_key_optimization_result
+best_stage = result["best_stage"]
+
+# Standard metric reports
+protocol.print_alice_guessing_metrics()
+protocol.print_eve_guessing_metrics_lp()
+protocol.print_key_rate_summary_reverse_fano_lp()
 ```
 
-### 4) Contextuality robustness
+## File Map
 
-```python
-r_star = scenario.compute_dephasing_robustness()
-cf = scenario.compute_contextual_fraction()
-```
+- `contextualityqkd/scenario.py`: generic scenario container and formatting
+- `contextualityqkd/quantum.py`: GPT/quantum scenario classes and factory constructors
+- `contextualityqkd/protocol.py`: protocol metrics, LP-derived key rates, automatic optimizer
+- `contextualityqkd/contextuality.py`: contextuality LP metrics (contextual fraction, robustness)
+- `contextualityqkd/randomness_lp.py`: Eve LP backend
+- `contextualityqkd/demos/`: five maintained demos listed above
 
-## Project Structure
+## Dependencies
 
-- `contextualityqkd/`
-  - `scenario.py`: scenario container, OPEQ discovery/validation, Alice benchmark
-  - `quantum.py`: quantum/GPT conversions and scenario constructors
-  - `randomness.py`: internal Eve LP backends and entropy helpers
-  - `contextuality.py`: internal simplex-embeddability/contextuality LP backends
-  - `linalg_utils.py`: nullspace/independence/extremal-ray helper wrappers
-  - `extremal_finders.py`: CDD/MOSEK cone conversion backends
-- `contextualityqkd/demos/`: split per-example randomness/QKD demos, including PORAC (3,2)
-- `pyproject.toml`: metadata and dependencies
-- `requirements.txt`: runtime dependencies
+Core runtime dependencies include:
 
-## Practical Notes
+- `numpy`
+- `sympy`
+- `scipy`
+- `methodtools`
+- `pycddlib`
+- `mosek`
 
-- Measurement inference from a flat effect set is combinatorial in the number of effects; constrain with `outcomes_per_measurement` when possible.
-- Mixed inferred measurement cardinalities are supported; returned grouped effects are zero-padded internally.
-- If you already know measurement contexts, pass `measurement_indices` into `GPTContextualityScenario` / `QuantumContextualityScenario`.
-- `QuantumContextualityScenario(...)` automatically uses a projector fast path when applicable.
-- For advanced cone work, import directly from `contextualityqkd.extremal_finders`.
-- For strict consistency checks, call `scenario.sanity_check()`.
+See `pyproject.toml` / `requirements.txt` for full dependency declarations.

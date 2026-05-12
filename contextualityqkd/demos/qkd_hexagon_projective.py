@@ -1,4 +1,4 @@
-"""QKD protocol demo: Peres 24-ray construction with 6 disjoint bases."""
+"""QKD protocol demo: hexagon states with projective measurements only."""
 
 from __future__ import annotations
 
@@ -22,42 +22,11 @@ from contextualityqkd.scenario import ContextualityScenario
 
 def main() -> None:
     np.set_printoptions(precision=6, suppress=True)
-    ContextualityScenario.print_title("QKD Protocol: Peres 24 rays in 6 disjoint 4-ray bases")
+    ContextualityScenario.print_title("QKD Protocol: Hexagon projective measurements")
 
-    rays = np.array(
-        [
-            [2, 0, 0, 0],
-            [0, 2, 0, 0],
-            [0, 0, 2, 0],
-            [0, 0, 0, 2],
-            [1, 1, 1, 1],
-            [1, 1, -1, -1],
-            [1, -1, 1, -1],
-            [1, -1, -1, 1],
-            [1, -1, -1, -1],
-            [1, -1, 1, 1],
-            [1, 1, -1, 1],
-            [1, 1, 1, -1],
-            [1, 1, 0, 0],
-            [1, -1, 0, 0],
-            [0, 0, 1, 1],
-            [0, 0, 1, -1],
-            [0, 1, 0, 1],
-            [0, 1, 0, -1],
-            [1, 0, 1, 0],
-            [1, 0, -1, 0],
-            [1, 0, 0, -1],
-            [1, 0, 0, 1],
-            [0, 1, -1, 0],
-            [0, 1, 1, 0],
-        ],
-        dtype=int,
-    )
-
-    measurement_indices = [tuple(range(4 * y, 4 * (y + 1))) for y in range(6)]
-
-    scenario = GPTContextualityScenario.from_integer_rays(
-        rays=rays,
+    measurement_indices = [(0, 3), (1, 4), (2, 5)]
+    scenario = GPTContextualityScenario.from_xz_ring(
+        num_states=6,
         measurement_indices=measurement_indices,
         verbose=False,
     )

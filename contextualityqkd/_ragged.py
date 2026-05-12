@@ -44,6 +44,57 @@ def build_valid_outcome_masks(
     return valid_a_mask, valid_b_mask, valid_ab_mask
 
 
+def normalize_behavior_table_bob(
+    data: Any,
+    *,
+    atol: float = 1e-9,
+    pad_value: Any = 0,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Normalize dense/ragged/masked ``data[x][y][b]`` into one padded 3D array.
+
+    Returns
+    -------
+    tuple
+        ``(dense, b_counts, valid_b_mask)`` where:
+        - ``dense`` has shape ``(X, Y, B_max)``,
+        - ``b_counts`` has shape ``(Y,)``,
+        - ``valid_b_mask`` has shape ``(Y, B_max)``.
+    """
+    if np.ma.isMaskedArray(data):
+        dense, b_counts = _normalize_behavior_table_bob_dense_masked(
+            data,
+            atol=atol,
+            pad_value=pad_value,
+        )
+    else:
+        raw = np.asarray(data, dtype=object)
+        if raw.ndim == 3:
+            dense = raw.copy()
+            b_counts = _infer_b_cardinalities_from_dense_behavior_bob(dense, atol=atol)
+        else:
+            dense, b_counts = _normalize_behavior_table_bob_ragged(data, pad_value=pad_value)
+
+    num_x, num_y, max_b = dense.shape
+    if num_x == 0 or num_y == 0 or max_b == 0:
+        raise ValueError("data must have nonzero shape in all axes.")
+
+    valid_b_mask = np.zeros((num_y, max_b), dtype=bool)
+    for y, count in enumerate(np.asarray(b_counts, dtype=int).reshape(-1)):
+        if count <= 0 or count > max_b:
+            raise ValueError("Inferred B(y) cardinalities are invalid.")
+        valid_b_mask[y, :count] = True
+
+    # Enforce structural zeros outside inferred support.
+    invalid = np.broadcast_to(~valid_b_mask[np.newaxis, :, :], dense.shape)
+    for idx in np.argwhere(invalid):
+        i = tuple(idx.tolist())
+        if not _is_zero_entry(dense[i], atol=atol):
+            raise ValueError("Dense data has nonzero entry outside inferred B support.")
+        dense[i] = pad_value
+    dense[invalid] = pad_value
+    return dense, np.asarray(b_counts, dtype=int), valid_b_mask
+
+
 def normalize_behavior_table(
     data: Any,
     *,
@@ -162,6 +213,148 @@ def _normalize_behavior_table_dense_masked(
         dense[i] = pad_value
     dense[invalid] = pad_value
     return dense, a_counts, b_counts
+
+
+def _normalize_behavior_table_bob_dense_masked(
+    data: Any,
+    *,
+    atol: float,
+    pad_value: Any,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Normalize dense masked-array data for Bob-only tables."""
+    masked = np.ma.asarray(data, dtype=object)
+    if masked.ndim != 3:
+        raise ValueError("Masked data must have shape (X, Y, B).")
+    num_x, num_y, max_b = masked.shape
+    if num_x == 0 or num_y == 0 or max_b == 0:
+        raise ValueError("data must have nonzero shape in all axes.")
+
+    dense = np.asarray(np.ma.getdata(masked), dtype=object).copy()
+    mask = np.asarray(np.ma.getmaskarray(masked), dtype=bool)
+    dense[mask] = pad_value
+
+    b_counts = np.zeros(num_y, dtype=int)
+    for y in range(num_y):
+        active = np.array(
+            [
+                any(not bool(mask[x, y, b]) for x in range(num_x))
+                for b in range(max_b)
+            ],
+            dtype=bool,
+        )
+        if not np.any(active):
+            raise ValueError(f"Could not infer a positive B cardinality for y={y} from mask.")
+        last = int(np.flatnonzero(active).max())
+        if np.any(~active[: last + 1]):
+            raise ValueError(
+                f"Masked dense data for y={y} has non-suffix padding along B "
+                "(interior masked hole before a later active outcome)."
+            )
+        b_counts[y] = last + 1
+
+    valid_b_mask = np.zeros((num_y, max_b), dtype=bool)
+    for y, count in enumerate(b_counts.tolist()):
+        valid_b_mask[y, : int(count)] = True
+    invalid = np.broadcast_to(~valid_b_mask[np.newaxis, :, :], dense.shape)
+
+    if np.any(mask & ~invalid):
+        raise ValueError(
+            "Masked data has masked entries inside inferred valid support. "
+            "Masks are interpreted as structural padding only."
+        )
+    for idx in np.argwhere(invalid & ~mask):
+        i = tuple(idx.tolist())
+        if not _is_zero_entry(dense[i], atol=atol):
+            raise ValueError("Masked dense data has nonzero entry outside inferred support.")
+        dense[i] = pad_value
+    dense[invalid] = pad_value
+    return dense, b_counts
+
+
+def _infer_b_cardinalities_from_dense_behavior_bob(
+    dense: np.ndarray,
+    *,
+    atol: float,
+) -> np.ndarray:
+    """Infer ``B=B(y)`` by trailing-zero support in dense Bob-only data."""
+    arr = np.asarray(dense, dtype=object)
+    if arr.ndim != 3:
+        raise ValueError("dense must have shape (X, Y, B).")
+    num_x, num_y, max_b = arr.shape
+
+    b_counts = np.zeros(num_y, dtype=int)
+    for y in range(num_y):
+        active = np.array(
+            [
+                any(not _is_zero_entry(arr[x, y, b], atol=atol) for x in range(num_x))
+                for b in range(max_b)
+            ],
+            dtype=bool,
+        )
+        if not np.any(active):
+            raise ValueError(f"Could not infer a positive B cardinality for y={y}.")
+        last = int(np.flatnonzero(active).max())
+        if np.any(~active[: last + 1]):
+            raise ValueError(
+                f"Dense data for y={y} has non-suffix padding along B "
+                "(interior zero hole before a later active outcome). "
+                "Use ragged input or a masked array to avoid ambiguity."
+            )
+        b_counts[y] = last + 1
+
+    for y in range(num_y):
+        for b in range(int(b_counts[y]), max_b):
+            for x in range(num_x):
+                if not _is_zero_entry(arr[x, y, b], atol=atol):
+                    raise ValueError("Dense data has nonzero entry outside inferred B support.")
+    return b_counts
+
+
+def _normalize_behavior_table_bob_ragged(
+    data: Any,
+    *,
+    pad_value: Any,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Normalize ragged ``data[x][y][b]`` into padded ``(X, Y, B_max)``."""
+    x_blocks = _as_list(data)
+    if len(x_blocks) == 0:
+        raise ValueError("data must have at least one preparation setting x.")
+    y0 = _as_list(x_blocks[0])
+    if len(y0) == 0:
+        raise ValueError("data must have at least one measurement setting y.")
+    num_x = len(x_blocks)
+    num_y = len(y0)
+
+    for x, block in enumerate(x_blocks):
+        y_blocks = _as_list(block)
+        if len(y_blocks) != num_y:
+            raise ValueError(f"data[{x}] has {len(y_blocks)} y-settings, expected {num_y}.")
+
+    b_counts = np.zeros(num_y, dtype=int)
+    for y in range(num_y):
+        b_expected: int | None = None
+        for x in range(num_x):
+            outcomes_b = _as_list(_as_list(x_blocks[x])[y])
+            if b_expected is None:
+                b_expected = len(outcomes_b)
+                if b_expected == 0:
+                    raise ValueError(f"data[{x}][{y}] has zero b-outcomes.")
+            elif len(outcomes_b) != b_expected:
+                raise ValueError(
+                    f"Ragged data violates B=B(y): data[{x}][{y}] has {len(outcomes_b)} b-outcomes, "
+                    f"expected {b_expected} for y={y}."
+                )
+        b_counts[y] = int(b_expected)
+
+    max_b = int(np.max(b_counts))
+    dense = np.empty((num_x, num_y, max_b), dtype=object)
+    dense[:, :, :] = pad_value
+    for x in range(num_x):
+        for y in range(num_y):
+            outcomes_b = _as_list(_as_list(x_blocks[x])[y])
+            for b in range(int(b_counts[y])):
+                dense[x, y, b] = outcomes_b[b]
+    return dense, b_counts
 
 
 def _infer_cardinalities_from_dense_behavior(
@@ -390,7 +583,7 @@ def normalize_grouped_vectors_settings_single_outcome(
     name: str,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """Normalize grouped vectors where 2D means ``(S, K)`` (one outcome per setting)."""
-    arr = np.asarray(values, dtype=object)
+    arr = np.asarray(values)
     if arr.ndim == 2:
         promoted = arr[:, np.newaxis, :]
         counts = np.ones(promoted.shape[0], dtype=int)
@@ -400,6 +593,16 @@ def normalize_grouped_vectors_settings_single_outcome(
         counts = np.full(arr.shape[0], arr.shape[1], dtype=int)
         valid = np.ones((arr.shape[0], arr.shape[1]), dtype=bool)
         return arr, counts, valid
+    arr_obj = np.asarray(values, dtype=object)
+    if arr_obj.ndim == 2:
+        promoted = arr_obj[:, np.newaxis, :]
+        counts = np.ones(promoted.shape[0], dtype=int)
+        valid = np.ones((promoted.shape[0], 1), dtype=bool)
+        return promoted, counts, valid
+    if arr_obj.ndim == 3:
+        counts = np.full(arr_obj.shape[0], arr_obj.shape[1], dtype=int)
+        valid = np.ones((arr_obj.shape[0], arr_obj.shape[1]), dtype=bool)
+        return arr_obj, counts, valid
     return _normalize_grouped_vectors_ragged(values, name=name)
 
 
@@ -409,7 +612,7 @@ def normalize_grouped_vectors_single_setting_many_outcomes(
     name: str,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """Normalize grouped vectors where 2D means ``(O, K)`` for one setting."""
-    arr = np.asarray(values, dtype=object)
+    arr = np.asarray(values)
     if arr.ndim == 2:
         promoted = arr[np.newaxis, :, :]
         counts = np.array([promoted.shape[1]], dtype=int)
@@ -419,6 +622,16 @@ def normalize_grouped_vectors_single_setting_many_outcomes(
         counts = np.full(arr.shape[0], arr.shape[1], dtype=int)
         valid = np.ones((arr.shape[0], arr.shape[1]), dtype=bool)
         return arr, counts, valid
+    arr_obj = np.asarray(values, dtype=object)
+    if arr_obj.ndim == 2:
+        promoted = arr_obj[np.newaxis, :, :]
+        counts = np.array([promoted.shape[1]], dtype=int)
+        valid = np.ones((1, promoted.shape[1]), dtype=bool)
+        return promoted, counts, valid
+    if arr_obj.ndim == 3:
+        counts = np.full(arr_obj.shape[0], arr_obj.shape[1], dtype=int)
+        valid = np.ones((arr_obj.shape[0], arr_obj.shape[1]), dtype=bool)
+        return arr_obj, counts, valid
     return _normalize_grouped_vectors_ragged(values, name=name)
 
 
@@ -498,6 +711,12 @@ def _normalize_grouped_vectors_ragged(
     *,
     name: str,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    dense = np.asarray(values, dtype=object)
+    if dense.ndim == 3:
+        counts = np.full(dense.shape[0], dense.shape[1], dtype=int)
+        valid = np.ones((dense.shape[0], dense.shape[1]), dtype=bool)
+        return dense, counts, valid
+
     settings = _as_list(values)
     if len(settings) == 0:
         raise ValueError(f"{name} must contain at least one setting.")
@@ -505,11 +724,13 @@ def _normalize_grouped_vectors_ragged(
     num_settings = len(settings)
     counts = np.zeros(num_settings, dtype=int)
     vec_dim: int | None = None
+    settings_as_rows: list[list[list[Any]]] = []
     for setting_idx, setting in enumerate(settings):
         outcomes = _as_list(setting)
         if len(outcomes) == 0:
             raise ValueError(f"{name}[{setting_idx}] has zero outcomes.")
         counts[setting_idx] = len(outcomes)
+        row_vectors: list[list[Any]] = []
         for outcome_idx, outcome in enumerate(outcomes):
             vector = _as_list(outcome)
             if len(vector) == 0:
@@ -521,15 +742,16 @@ def _normalize_grouped_vectors_ragged(
                     f"{name}[{setting_idx}][{outcome_idx}] has vector dimension {len(vector)}, "
                     f"expected {vec_dim}."
                 )
+            row_vectors.append(vector)
+        settings_as_rows.append(row_vectors)
 
     max_outcomes = int(np.max(counts))
     assert vec_dim is not None
     dense = np.empty((num_settings, max_outcomes, vec_dim), dtype=object)
     dense[:, :, :] = 0
     for setting_idx in range(num_settings):
-        outcomes = _as_list(settings[setting_idx])
-        for outcome_idx, outcome in enumerate(outcomes):
-            vector = _as_list(outcome)
+        outcomes = settings_as_rows[setting_idx]
+        for outcome_idx, vector in enumerate(outcomes):
             for k in range(vec_dim):
                 dense[setting_idx, outcome_idx, k] = vector[k]
 
