@@ -204,3 +204,10 @@ cython_debug/
 marimo/_static/
 marimo/_lsp/
 __marimo__/
+
+# IDE settings and agent notes (local development only)
+settings.json
+AGENTS.md
+
+# Large non-essential papers and documents
+*.pdf

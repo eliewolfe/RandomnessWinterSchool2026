@@ -4,3 +4,6 @@ scipy
 pycddlib
 sympy
 methodtools
+numba
+networkx
+tqdm

@@ -19,6 +19,9 @@ dependencies = [
   "pycddlib",
   "sympy",
   "methodtools",
+  "numba",
+  "networkx",
+  "tqdm",
 ]
 
 [tool.setuptools.packages.find]

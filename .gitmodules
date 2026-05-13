@@ -1,0 +1,4 @@
+[submodule "external/inflation"]
+	path = external/inflation
+	url = https://github.com/ecboghiu/inflation.git
+	branch = devel
