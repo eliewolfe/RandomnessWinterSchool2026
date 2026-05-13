@@ -514,7 +514,7 @@ class ContextualityProtocol:
         return table
 
     @cached_property
-    def alice_guess_bob_by_y_key(self) -> np.ndarray:
+    def alice_guess_bob_by_y_given_go(self) -> np.ndarray:
         """Alice key-conditioned guess vector over y; NaN where ``where_key[y]`` is empty."""
         out = np.full((self.scenario.Y_cardinality,), np.nan, dtype=float)
         for y, row in enumerate(self.where_key):
@@ -522,6 +522,49 @@ class ContextualityProtocol:
                 continue
             out[y] = float(np.mean([self.alice_guess_bob_by_xy[int(x), y] for x in row]))
         return out
+
+    @cached_property
+    def bob_outcome_likelihood_by_y_given_go(self) -> np.ndarray:
+        """The outcome for Bob probabilities averaged over all x in where_key; NaN where ``where_key[y]`` is empty.
+        Returns a 2d array p(b|y), indices 1) Y, 2) B
+        """
+        out = np.full((self.scenario.Y_cardinality, self.scenario.B_cardinality), np.nan, dtype=float)
+        b_counts = self.scenario.b_cardinality_per_y
+        data = self.scenario.data_numeric
+        for y, row in enumerate(self.where_key):
+            if len(row) == 0:
+                continue
+            for b in range(b_counts[y]):
+                out[y, b] = float(np.mean([data[int(x), y, b] for x in row]))
+        return out
+
+    @cached_property
+    def bob_and_key_joint_distribution_by_y(self) -> np.ndarray:
+        """
+        We return a joint distribution over key and b probabilities for every y.
+        Indices are: 1) Y, 2) B, 3) K
+        """
+        out = np.full((self.scenario.Y_cardinality, self.scenario.B_cardinality, self.scenario.B_cardinality), np.nan, dtype=float)
+        data = self.scenario.data_numeric
+        b_counts = self.scenario.b_cardinality_per_y
+        for y, row in enumerate(self.where_key):
+            for b, k in np.ndindex(b_counts[y], b_counts[y]):
+                prob = 0
+                for x in row:
+                    if k == self.scenario.key_selection_by_xy[int(x), y]:
+                        prob += float(data[x, y, b]) / len(row)
+                out[y, b, k] = prob
+        return out
+
+    @cached_property
+    def key_probability_by_b_and_y(self) -> np.ndarray:
+        """
+        We return a conditional distribution of key probabilities for every y and b.
+        Indices are: 1) Y, 2) B, 3) K
+        """
+        return np.divide(self.bob_and_key_joint_distribution_by_y, self.bob_outcome_likelihood_by_y_given_go[:, :, np.newaxis])
+        # np.divide(self.bob_and_key_joint_distribution_by_y, self.bob_outcome_likelihood_by_y_given_go[:, :, np.newaxis], out=np.full_like(self.bob_and_key_joint_distribution_by_y, np.nan), where=self.bob_outcome_likelihood_by_y_given_go[:, :, np.newaxis] > 0)
+
 
     @cached_property
     def alice_guess_bob_by_xy_key_masked(self) -> np.ma.MaskedArray:
@@ -551,6 +594,17 @@ class ContextualityProtocol:
         return table
 
     @cached_property
+    def bob_uncertainty_key_by_y(self) -> np.ndarray:
+        """Bob uncertainty table ``H(K|y,B)`` with shape ``(Y)``."""
+        out = np.zeros((self.scenario.Y_cardinality,), dtype=float)
+        cond_probs = self.key_probability_by_b_and_y.reshape((self.scenario.Y_cardinality, -1))
+        joint_probs = self.bob_and_key_joint_distribution_by_y.reshape((self.scenario.Y_cardinality, -1))
+        positive = (cond_probs > 0)
+        for y in range(self.scenario.Y_cardinality):
+            out[y] = -np.sum(joint_probs[y, positive[y]] * np.log2(cond_probs[y, positive[y]]))
+        return out
+
+    @cached_property
     def alice_uncertainty_bob_by_y_key(self) -> np.ndarray:
         """Alice key-conditioned uncertainty vector over y; NaN for empty key rows."""
         out = np.full((self.scenario.Y_cardinality,), np.nan, dtype=float)
@@ -578,11 +632,29 @@ class ContextualityProtocol:
 
     @cached_property
     def eve_guess_key_by_y_lp(self) -> np.ndarray:
+        """Eve LP-optimal key-guessing probabilities per y (NaN for empty key rows)."""
+        return np.asarray(
+            _solve_eve_guess_key_by_y_lp_hotstart(
+                scenario=self.scenario,
+                where_key=self.where_key,
+                master_key="Alice"
+            ),
+            dtype=float,
+        )
+
+    @cached_property
+    def eve_guess_key_average_y_lp(self) -> float:
+        """Uniform average of Eve LP guess probabilities over non-empty y rows."""
+        return float(self._average_over_y(self.eve_guess_key_by_y_lp, y_distribution=None, skip_nan=True))
+
+    @cached_property
+    def eve_guess_bob_by_y_lp(self) -> np.ndarray:
         """Eve LP-optimal Bob-guessing probabilities per y (NaN for empty key rows)."""
         return np.asarray(
             _solve_eve_guess_key_by_y_lp_hotstart(
                 scenario=self.scenario,
                 where_key=self.where_key,
+                master_key="Bob"
             ),
             dtype=float,
         )
@@ -590,10 +662,10 @@ class ContextualityProtocol:
     @cached_property
     def eve_guess_bob_average_y_lp(self) -> float:
         """Uniform average of Eve LP guess probabilities over non-empty y rows."""
-        return float(self._average_over_y(self.eve_guess_key_by_y_lp, y_distribution=None, skip_nan=True))
+        return float(self._average_over_y(self.eve_guess_bob_by_y_lp, y_distribution=None, skip_nan=True))
 
     @cached_property
-    def eve_uncertainty_bob_min_entropy_by_y_lp(self) -> np.ndarray:
+    def eve_uncertainty_key_min_entropy_by_y_lp(self) -> np.ndarray:
         """Eve min-entropy lower-bound vector from LP guessing probabilities."""
         out = np.full_like(self.eve_guess_key_by_y_lp, np.nan, dtype=float)
         for y, value in enumerate(self.eve_guess_key_by_y_lp):
@@ -603,18 +675,18 @@ class ContextualityProtocol:
         return out
 
     @cached_property
-    def eve_uncertainty_bob_min_entropy_average_y_lp(self) -> float:
+    def eve_uncertainty_key_min_entropy_average_y_lp(self) -> float:
         """Uniform average of Eve min-entropy bounds over non-empty y rows."""
         return float(
             self._average_over_y(
-                self.eve_uncertainty_bob_min_entropy_by_y_lp,
+                self.eve_uncertainty_key_min_entropy_by_y_lp,
                 y_distribution=None,
                 skip_nan=True,
             )
         )
 
     @cached_property
-    def eve_uncertainty_bob_reverse_fano_by_y_lp(self) -> np.ndarray:
+    def eve_uncertainty_key_reverse_fano_by_y_lp(self) -> np.ndarray:
         """Eve reverse-Fano entropy lower-bound vector from LP guessing probabilities."""
         out = np.full_like(self.eve_guess_key_by_y_lp, np.nan, dtype=float)
         for y, value in enumerate(self.eve_guess_key_by_y_lp):
@@ -624,11 +696,11 @@ class ContextualityProtocol:
         return out
 
     @cached_property
-    def eve_uncertainty_bob_reverse_fano_average_y_lp(self) -> float:
+    def eve_uncertainty_key_reverse_fano_average_y_lp(self) -> float:
         """Uniform average of Eve reverse-Fano bounds over non-empty y rows."""
         return float(
             self._average_over_y(
-                self.eve_uncertainty_bob_reverse_fano_by_y_lp,
+                self.eve_uncertainty_key_reverse_fano_by_y_lp,
                 y_distribution=None,
                 skip_nan=True,
             )
@@ -636,8 +708,9 @@ class ContextualityProtocol:
 
     @cached_property
     def key_rate_by_y_reverse_fano_lp(self) -> np.ndarray:
-        """Per-y key-rate (reverse-Fano Eve bound minus Alice uncertainty), key-conditioned."""
-        return self.eve_uncertainty_bob_reverse_fano_by_y_lp - self.alice_uncertainty_bob_by_y_key
+        """Per-y key-rate (reverse-Fano Eve bound minus Bob's uncertainty), key-conditioned."""
+        # CHANGED in new Alice-holds-key protocols!
+        return self.eve_uncertainty_key_reverse_fano_by_y_lp - self.bob_uncertainty_key_by_y
 
     @cached_property
     def key_rate_per_key_run_reverse_fano_lp(self) -> float:
@@ -664,8 +737,9 @@ class ContextualityProtocol:
 
     @cached_property
     def key_rate_by_y_min_entropy_lp(self) -> np.ndarray:
-        """Per-y key-rate (min-entropy Eve bound minus Alice uncertainty), key-conditioned."""
-        return self.eve_uncertainty_bob_min_entropy_by_y_lp - self.alice_uncertainty_bob_by_y_key
+        """Per-y key-rate (min-entropy Eve bound minus Bob's uncertainty), key-conditioned."""
+        # CHANGED in new Alice-holds-key protocols!
+        return self.eve_uncertainty_key_min_entropy_by_y_lp - self.bob_uncertainty_key_by_y
 
     @cached_property
     def key_rate_per_key_run_min_entropy_lp(self) -> float:
@@ -702,7 +776,7 @@ class ContextualityProtocol:
             "P_A^guess(B|x,y) on key-eligible pairs (masked by where_key):",
             self._format_masked_xy_table(self.alice_guess_bob_by_xy_key_masked, precision=precision_table),
             "P_A^guess(B|X,y,key):",
-            self._format_numeric_array(self.alice_guess_bob_by_y_key, precision=precision_table),
+            self._format_numeric_array(self.alice_guess_bob_by_y_given_go, precision=precision_table),
             "P_A^guess(B|key) = "
             f"{ContextualityScenario.format_numeric(self.alice_guess_bob_key_weighted, precision=precision_scalar)}",
         ]
@@ -757,15 +831,19 @@ class ContextualityProtocol:
     def format_eve_guessing_metrics_lp(
         self,
         *,
+        master_key: Literal["Alice", "Bob"] = "Alice",
         precision_vector: int = 3,
         precision_scalar: int = 6,
     ) -> str:
         """Format Eve LP guessing metrics."""
+        guessing_data = self.eve_guess_key_by_y_lp if master_key == "Alice" else self.eve_guess_bob_by_y_lp
+        average_guessing_data = self.eve_guess_key_average_y_lp if master_key == "Alice" else self.eve_guess_bob_average_y_lp
+
         lines = [
-            "Eve LP guessing metrics:",
-            "P_E^guess(B|y,key) (LP):",
+            f"Eve LP guessing metrics, where the master key is held by {master_key}:",
+            "P_E^guess(key|y) (LP):",
             self._format_numeric_array(self.eve_guess_key_by_y_lp, precision=precision_vector),
-            "P_E^guess(B|Y,key) (LP) = "
+            "P_E^guess(key|Y) (LP) = "
             f"{ContextualityScenario.format_numeric(self.eve_guess_bob_average_y_lp, precision=precision_scalar)}",
         ]
         return "\n".join(lines)
@@ -773,6 +851,7 @@ class ContextualityProtocol:
     def print_eve_guessing_metrics_lp(
         self,
         *,
+        master_key: Literal["Alice", "Bob"] = "Alice",
         precision_vector: int = 3,
         precision_scalar: int = 6,
         leading_newline: bool = True,
@@ -780,6 +859,7 @@ class ContextualityProtocol:
         """Print Eve LP guessing metrics."""
         prefix = "\n" if leading_newline else ""
         print(prefix + self.format_eve_guessing_metrics_lp(
+            master_key=master_key,
             precision_vector=precision_vector,
             precision_scalar=precision_scalar,
         ))
@@ -793,10 +873,10 @@ class ContextualityProtocol:
         """Format Eve reverse-Fano uncertainty lower bounds from LP guessing outputs."""
         lines = [
             "Eve uncertainty lower bounds:",
-            "H_E(B|y,key) >= RF(P_E^guess) (LP):",
-            self._format_numeric_array(self.eve_uncertainty_bob_reverse_fano_by_y_lp, precision=precision_vector),
-            "H_E(B|Y,key) >= "
-            f"{ContextualityScenario.format_numeric(self.eve_uncertainty_bob_reverse_fano_average_y_lp, precision=precision_scalar)}",
+            "H_E(Key|y) >= RF(P_E^guess) (LP):",
+            self._format_numeric_array(self.eve_uncertainty_key_reverse_fano_by_y_lp, precision=precision_vector),
+            "H_E(Key|Y) >= "
+            f"{ContextualityScenario.format_numeric(self.eve_uncertainty_key_reverse_fano_average_y_lp, precision=precision_scalar)}",
         ]
         return "\n".join(lines)
 
