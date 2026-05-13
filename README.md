@@ -52,9 +52,12 @@ from contextualityqkd.protocol import ContextualityProtocol
 
 protocol = ContextualityProtocol(
     scenario,
+    master_key_holder="Bob",   # default is "Alice"
     where_key=measurement_indices,  # one row per y
 )
 ```
+
+Set `master_key_holder="Bob"` to recover the older Bob-held-key convention.
 
 ## 2) Automatic `where_key` optimization (built in)
 
@@ -73,6 +76,10 @@ protocol = ContextualityProtocol(
 ### Automatic optimizer options
 
 `ContextualityProtocol(..., where_key="Automatic", ...)` supports:
+
+- `master_key_holder`
+  - `"Alice"` (default)
+  - `"Bob"` (use this to recover the older Bob-held-key convention)
 
 - `optimize_cluster_tolerance` (default `1e-6`)
 - `optimize_cluster_by`

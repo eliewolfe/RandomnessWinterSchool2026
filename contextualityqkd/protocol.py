@@ -1,4 +1,4 @@
-"""Protocol-level Bob-outcome QKD analysis built on top of ContextualityScenario."""
+"""Protocol-level QKD analysis with a configurable master-key holder."""
 
 from __future__ import annotations
 
@@ -14,9 +14,10 @@ from .scenario import ContextualityScenario
 
 
 class ContextualityProtocol:
-    """QKD protocol metrics for Bob-outcome guessing with key-conditioning subsets."""
+    """QKD protocol metrics for key-conditioning subsets and a chosen master-key holder."""
 
     scenario: ContextualityScenario
+    master_key_holder: Literal["Alice", "Bob"]
     atol: float
     _where_key_input: object | None
     _where_key_optimization_result: dict[str, object] | None
@@ -25,6 +26,7 @@ class ContextualityProtocol:
         self,
         scenario: ContextualityScenario,
         where_key: list[list[int]] | np.ndarray | str | None = None,
+        master_key_holder: Literal["Alice", "Bob"] | str = "Alice",
         atol: float = 1e-9,
         optimize_verbose: bool | None = None,
         optimize_cluster_tolerance: float = 1e-6,
@@ -44,6 +46,7 @@ class ContextualityProtocol:
         if self.atol < 0.0:
             raise ValueError("atol must be nonnegative.")
         self._where_key_optimization_result = None
+        self.master_key_holder = self._canonicalize_master_key_holder(master_key_holder)
 
         if isinstance(where_key, str):
             token = where_key.strip().lower()
@@ -55,6 +58,7 @@ class ContextualityProtocol:
             verbosity = bool(self.scenario.verbose) if optimize_verbose is None else bool(optimize_verbose)
             result = self._optimize_where_key_automatic(
                 scenario=self.scenario,
+                master_key_holder=self.master_key_holder,
                 cluster_tolerance=float(optimize_cluster_tolerance),
                 cluster_by=optimize_cluster_by,
                 tie_tolerance=self.atol,
@@ -69,6 +73,15 @@ class ContextualityProtocol:
             return
 
         self._where_key_input = where_key
+
+    @staticmethod
+    def _canonicalize_master_key_holder(master_key_holder: Literal["Alice", "Bob"] | str) -> Literal["Alice", "Bob"]:
+        token = str(master_key_holder).strip().lower()
+        if token == "alice":
+            return "Alice"
+        if token == "bob":
+            return "Bob"
+        raise ValueError("master_key_holder must be 'Alice' or 'Bob'.")
 
     @staticmethod
     def reverse_fano_bound(p_guess: float) -> float:
@@ -337,6 +350,7 @@ class ContextualityProtocol:
         cls,
         *,
         scenario: ContextualityScenario,
+        master_key_holder: Literal["Alice", "Bob"],
         cluster_tolerance: float,
         cluster_by: Literal["threshold_uncertainty", "threshold_alice_guess_bob_probability"],
         tie_tolerance: float,
@@ -358,7 +372,7 @@ class ContextualityProtocol:
                 "'latest_optimal_stage'."
             )
 
-        baseline = cls(scenario, where_key=None, atol=tie_tolerance)
+        baseline = cls(scenario, where_key=None, master_key_holder=master_key_holder, atol=tie_tolerance)
         uncertainty_xy = np.asarray(baseline.alice_uncertainty_bob_by_xy, dtype=float)
         guess_xy = np.asarray(baseline.alice_guess_bob_by_xy, dtype=float)
         metric_table = uncertainty_xy if cluster_by == "threshold_uncertainty" else guess_xy
@@ -379,7 +393,12 @@ class ContextualityProtocol:
 
         stage_entries: list[dict[str, object]] = []
         for stage_index, where_rows in enumerate(sweep_rows, start=1):
-            stage_protocol = cls(scenario, where_key=where_rows, atol=tie_tolerance)
+            stage_protocol = cls(
+                scenario,
+                where_key=where_rows,
+                master_key_holder=master_key_holder,
+                atol=tie_tolerance,
+            )
             key_counts = stage_protocol.key_counts_by_y.astype(int)
             is_uniform = bool(key_counts.size > 0 and np.all(key_counts == key_counts[0]))
             uniform_count = int(key_counts[0]) if is_uniform and key_counts.size > 0 else None
@@ -447,6 +466,7 @@ class ContextualityProtocol:
         return {
             "mode": "automatic",
             "objective": "reverse_fano_bits_per_experimental_run",
+            "master_key_holder": master_key_holder,
             "cluster_by": cluster_by,
             "cluster_tolerance": float(cluster_tolerance),
             "tie_tolerance": float(tie_tolerance),
@@ -665,6 +685,106 @@ class ContextualityProtocol:
         return float(self._average_over_y(self.eve_guess_bob_by_y_lp, y_distribution=None, skip_nan=True))
 
     @cached_property
+    def eve_uncertainty_bob_min_entropy_by_y_lp(self) -> np.ndarray:
+        """Eve min-entropy lower-bound vector for Bob as the master key."""
+        out = np.full_like(self.eve_guess_bob_by_y_lp, np.nan, dtype=float)
+        for y, value in enumerate(self.eve_guess_bob_by_y_lp):
+            if not np.isfinite(value) or value <= 0.0:
+                continue
+            out[y] = float(self.min_entropy(float(value)))
+        return out
+
+    @cached_property
+    def eve_uncertainty_bob_min_entropy_average_y_lp(self) -> float:
+        """Uniform average of Eve min-entropy bounds for Bob as the master key."""
+        return float(self._average_over_y(self.eve_uncertainty_bob_min_entropy_by_y_lp, y_distribution=None, skip_nan=True))
+
+    @cached_property
+    def eve_uncertainty_bob_reverse_fano_by_y_lp(self) -> np.ndarray:
+        """Eve reverse-Fano entropy lower-bound vector for Bob as the master key."""
+        out = np.full_like(self.eve_guess_bob_by_y_lp, np.nan, dtype=float)
+        for y, value in enumerate(self.eve_guess_bob_by_y_lp):
+            if not np.isfinite(value) or value <= 0.0:
+                continue
+            out[y] = float(self.reverse_fano_bound(float(value)))
+        return out
+
+    @cached_property
+    def eve_uncertainty_bob_reverse_fano_average_y_lp(self) -> float:
+        """Uniform average of Eve reverse-Fano bounds for Bob as the master key."""
+        return float(
+            self._average_over_y(
+                self.eve_uncertainty_bob_reverse_fano_by_y_lp,
+                y_distribution=None,
+                skip_nan=True,
+            )
+        )
+
+    @cached_property
+    def eve_guess_master_key_by_y_lp(self) -> np.ndarray:
+        """Eve LP-optimal guessing probabilities for the configured master key holder."""
+        return np.asarray(
+            _solve_eve_guess_key_by_y_lp_hotstart(
+                scenario=self.scenario,
+                where_key=self.where_key,
+                master_key=self.master_key_holder,
+            ),
+            dtype=float,
+        )
+
+    @cached_property
+    def eve_guess_master_key_average_y_lp(self) -> float:
+        """Uniform average of Eve LP guess probabilities for the configured master key holder."""
+        return float(self._average_over_y(self.eve_guess_master_key_by_y_lp, y_distribution=None, skip_nan=True))
+
+    @cached_property
+    def eve_uncertainty_master_key_min_entropy_by_y_lp(self) -> np.ndarray:
+        """Eve min-entropy lower-bound vector for the configured master key holder."""
+        out = np.full_like(self.eve_guess_master_key_by_y_lp, np.nan, dtype=float)
+        for y, value in enumerate(self.eve_guess_master_key_by_y_lp):
+            if not np.isfinite(value) or value <= 0.0:
+                continue
+            out[y] = float(self.min_entropy(float(value)))
+        return out
+
+    @cached_property
+    def eve_uncertainty_master_key_min_entropy_average_y_lp(self) -> float:
+        """Uniform average of Eve min-entropy bounds for the configured master key holder."""
+        return float(
+            self._average_over_y(
+                self.eve_uncertainty_master_key_min_entropy_by_y_lp,
+                y_distribution=None,
+                skip_nan=True,
+            )
+        )
+
+    @cached_property
+    def eve_uncertainty_master_key_reverse_fano_by_y_lp(self) -> np.ndarray:
+        """Eve reverse-Fano entropy lower-bound vector for the configured master key holder."""
+        out = np.full_like(self.eve_guess_master_key_by_y_lp, np.nan, dtype=float)
+        for y, value in enumerate(self.eve_guess_master_key_by_y_lp):
+            if not np.isfinite(value) or value <= 0.0:
+                continue
+            out[y] = float(self.reverse_fano_bound(float(value)))
+        return out
+
+    @cached_property
+    def eve_uncertainty_master_key_reverse_fano_average_y_lp(self) -> float:
+        """Uniform average of Eve reverse-Fano bounds for the configured master key holder."""
+        return float(
+            self._average_over_y(
+                self.eve_uncertainty_master_key_reverse_fano_by_y_lp,
+                y_distribution=None,
+                skip_nan=True,
+            )
+        )
+
+    @cached_property
+    def other_party_uncertainty_by_y(self) -> np.ndarray:
+        """Other-party uncertainty about the key, chosen to match the configured master key holder."""
+        return self.bob_uncertainty_key_by_y if self.master_key_holder == "Alice" else self.alice_uncertainty_bob_by_y_key
+
+    @cached_property
     def eve_uncertainty_key_min_entropy_by_y_lp(self) -> np.ndarray:
         """Eve min-entropy lower-bound vector from LP guessing probabilities."""
         out = np.full_like(self.eve_guess_key_by_y_lp, np.nan, dtype=float)
@@ -708,9 +828,8 @@ class ContextualityProtocol:
 
     @cached_property
     def key_rate_by_y_reverse_fano_lp(self) -> np.ndarray:
-        """Per-y key-rate (reverse-Fano Eve bound minus Bob's uncertainty), key-conditioned."""
-        # CHANGED in new Alice-holds-key protocols!
-        return self.eve_uncertainty_key_reverse_fano_by_y_lp - self.bob_uncertainty_key_by_y
+        """Per-y key-rate (Eve reverse-Fano bound minus the other party's uncertainty)."""
+        return self.eve_uncertainty_master_key_reverse_fano_by_y_lp - self.other_party_uncertainty_by_y
 
     @cached_property
     def key_rate_per_key_run_reverse_fano_lp(self) -> float:
@@ -737,9 +856,8 @@ class ContextualityProtocol:
 
     @cached_property
     def key_rate_by_y_min_entropy_lp(self) -> np.ndarray:
-        """Per-y key-rate (min-entropy Eve bound minus Bob's uncertainty), key-conditioned."""
-        # CHANGED in new Alice-holds-key protocols!
-        return self.eve_uncertainty_key_min_entropy_by_y_lp - self.bob_uncertainty_key_by_y
+        """Per-y key-rate (min-entropy Eve bound minus the other party's uncertainty)."""
+        return self.eve_uncertainty_master_key_min_entropy_by_y_lp - self.other_party_uncertainty_by_y
 
     @cached_property
     def key_rate_per_key_run_min_entropy_lp(self) -> float:
@@ -831,27 +949,28 @@ class ContextualityProtocol:
     def format_eve_guessing_metrics_lp(
         self,
         *,
-        master_key: Literal["Alice", "Bob"] = "Alice",
+        master_key: Literal["Alice", "Bob"] | None = None,
         precision_vector: int = 3,
         precision_scalar: int = 6,
     ) -> str:
         """Format Eve LP guessing metrics."""
-        guessing_data = self.eve_guess_key_by_y_lp if master_key == "Alice" else self.eve_guess_bob_by_y_lp
-        average_guessing_data = self.eve_guess_key_average_y_lp if master_key == "Alice" else self.eve_guess_bob_average_y_lp
+        holder = self.master_key_holder if master_key is None else self._canonicalize_master_key_holder(master_key)
+        guessing_data = self.eve_guess_key_by_y_lp if holder == "Alice" else self.eve_guess_bob_by_y_lp
+        average_guessing_data = self.eve_guess_key_average_y_lp if holder == "Alice" else self.eve_guess_bob_average_y_lp
 
         lines = [
-            f"Eve LP guessing metrics, where the master key is held by {master_key}:",
-            "P_E^guess(key|y) (LP):",
-            self._format_numeric_array(self.eve_guess_key_by_y_lp, precision=precision_vector),
-            "P_E^guess(key|Y) (LP) = "
-            f"{ContextualityScenario.format_numeric(self.eve_guess_bob_average_y_lp, precision=precision_scalar)}",
+            f"Eve LP guessing metrics, where the master key is held by {holder}:",
+            "P_E^guess(master_key|y) (LP):",
+            self._format_numeric_array(guessing_data, precision=precision_vector),
+            "P_E^guess(master_key|Y) (LP) = "
+            f"{ContextualityScenario.format_numeric(average_guessing_data, precision=precision_scalar)}",
         ]
         return "\n".join(lines)
 
     def print_eve_guessing_metrics_lp(
         self,
         *,
-        master_key: Literal["Alice", "Bob"] = "Alice",
+        master_key: Literal["Alice", "Bob"] | None = None,
         precision_vector: int = 3,
         precision_scalar: int = 6,
         leading_newline: bool = True,
@@ -867,22 +986,31 @@ class ContextualityProtocol:
     def format_eve_uncertainty_metrics_reverse_fano_lp(
         self,
         *,
+        master_key: Literal["Alice", "Bob"] | None = None,
         precision_vector: int = 3,
         precision_scalar: int = 6,
     ) -> str:
         """Format Eve reverse-Fano uncertainty lower bounds from LP guessing outputs."""
+        holder = self.master_key_holder if master_key is None else self._canonicalize_master_key_holder(master_key)
+        uncertainty_data = (
+            self.eve_uncertainty_key_reverse_fano_by_y_lp if holder == "Alice" else self.eve_uncertainty_bob_reverse_fano_by_y_lp
+        )
+        average_uncertainty = (
+            self.eve_uncertainty_key_reverse_fano_average_y_lp if holder == "Alice" else self.eve_uncertainty_bob_reverse_fano_average_y_lp
+        )
         lines = [
-            "Eve uncertainty lower bounds:",
-            "H_E(Key|y) >= RF(P_E^guess) (LP):",
-            self._format_numeric_array(self.eve_uncertainty_key_reverse_fano_by_y_lp, precision=precision_vector),
-            "H_E(Key|Y) >= "
-            f"{ContextualityScenario.format_numeric(self.eve_uncertainty_key_reverse_fano_average_y_lp, precision=precision_scalar)}",
+            f"Eve uncertainty lower bounds, where the master key is held by {holder}:",
+            "H_E(master_key|y) >= RF(P_E^guess(master_key|y)) (LP):",
+            self._format_numeric_array(uncertainty_data, precision=precision_vector),
+            "H_E(master_key|Y) >= "
+            f"{ContextualityScenario.format_numeric(average_uncertainty, precision=precision_scalar)}",
         ]
         return "\n".join(lines)
 
     def print_eve_uncertainty_metrics_reverse_fano_lp(
         self,
         *,
+        master_key: Literal["Alice", "Bob"] | None = None,
         precision_vector: int = 3,
         precision_scalar: int = 6,
         leading_newline: bool = True,
@@ -890,6 +1018,7 @@ class ContextualityProtocol:
         """Print Eve reverse-Fano uncertainty lower bounds from LP guessing outputs."""
         prefix = "\n" if leading_newline else ""
         print(prefix + self.format_eve_uncertainty_metrics_reverse_fano_lp(
+            master_key=master_key,
             precision_vector=precision_vector,
             precision_scalar=precision_scalar,
         ))
@@ -905,7 +1034,7 @@ class ContextualityProtocol:
             f"{ContextualityScenario.format_numeric(self.key_rate_per_experimental_run_reverse_fano_lp, precision=precision)}",
         ]
         if header:
-            lines = ["Key-rate summary (reverse Fano):"] + lines
+            lines = [f"Key-rate summary (reverse Fano, master key held by {self.master_key_holder}):"] + lines
         return "\n".join(lines)
 
     def print_key_rate_summary_reverse_fano_lp(

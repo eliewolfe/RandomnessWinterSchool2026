@@ -16,15 +16,15 @@ class ProtocolLPTests(unittest.TestCase):
             dtype=float,
         )
         scenario = ContextualityScenario(data)
-        protocol = ContextualityProtocol(scenario, where_key=[[], [0, 1]])
+        protocol = ContextualityProtocol(scenario, where_key=[[], [0, 1]], master_key_holder="Bob")
 
-        vec = protocol.eve_guess_bob_by_y_lp
+        vec = protocol.eve_guess_master_key_by_y_lp
         self.assertEqual(vec.shape, (2,))
         self.assertTrue(np.isnan(vec[0]))
         self.assertTrue(np.isfinite(vec[1]))
         self.assertGreaterEqual(vec[1], 0.0)
         self.assertLessEqual(vec[1], 1.0)
-        self.assertAlmostEqual(protocol.eve_guess_bob_average_y_lp, float(vec[1]))
+        self.assertAlmostEqual(protocol.eve_guess_master_key_average_y_lp, float(vec[1]))
 
     def test_reverse_fano_keyrate_outputs(self) -> None:
         data = np.array(
@@ -35,11 +35,15 @@ class ProtocolLPTests(unittest.TestCase):
             dtype=float,
         )
         scenario = ContextualityScenario(data)
-        protocol = ContextualityProtocol(scenario)
+        protocol = ContextualityProtocol(scenario, master_key_holder="Alice")
 
-        self.assertTrue(np.all(np.isfinite(protocol.eve_uncertainty_bob_reverse_fano_by_y_lp)))
+        self.assertTrue(np.all(np.isfinite(protocol.eve_uncertainty_master_key_reverse_fano_by_y_lp)))
         self.assertTrue(np.isfinite(protocol.key_rate_per_key_run_reverse_fano_lp))
         self.assertTrue(np.isfinite(protocol.key_rate_per_experimental_run_reverse_fano_lp))
+        np.testing.assert_allclose(
+            protocol.key_rate_by_y_reverse_fano_lp,
+            protocol.eve_uncertainty_master_key_reverse_fano_by_y_lp - protocol.other_party_uncertainty_by_y,
+        )
 
 
 if __name__ == "__main__":
