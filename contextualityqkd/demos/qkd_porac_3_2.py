@@ -134,7 +134,8 @@ def main() -> None:
     )
     protocol.print_alice_guessing_metrics()
     protocol.print_alice_uncertainty_metrics()
-    protocol.print_eve_guessing_metrics_lp()
+    protocol.print_eve_guessing_metrics_lp(master_key="Bob")
+    protocol.print_eve_guessing_metrics_lp(master_key="Alice")
     protocol.print_eve_uncertainty_metrics_reverse_fano_lp()
     protocol.print_key_rate_summary_reverse_fano_lp()
 

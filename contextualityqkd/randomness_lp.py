@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Sequence
+from typing import Sequence, Literal
 
 import mosek
 import numpy as np
@@ -132,8 +132,9 @@ def _build_bob_single_model_lp_components(
 def _solve_eve_guess_key_by_y_lp_hotstart(
     scenario: ContextualityScenario,
     where_key: Sequence[Sequence[int]],
+    master_key: Literal["Alice", "Bob"] = "Alice",
 ) -> np.ndarray:
-    """Solve Eve LP for Bob guessing probability for each y under key-conditioning subsets."""
+    """Solve Eve LP for key guessing probability for each y under key-conditioning subsets."""
     (
         num_x,
         num_y,
@@ -151,6 +152,7 @@ def _solve_eve_guess_key_by_y_lp_hotstart(
         raise ValueError(f"where_key must have one row per y (expected {num_y}).")
 
     objective_data: dict[int, tuple[np.ndarray, np.ndarray]] = {}
+    key_lookup = scenario.key_selection_by_xy
     for y, row in enumerate(where_key):
         x_row = np.asarray(row, dtype=int).reshape(-1)
         if x_row.size == 0:
@@ -161,14 +163,18 @@ def _solve_eve_guess_key_by_y_lp_hotstart(
             continue
         if np.any(x_row < 0) or np.any(x_row >= num_x):
             raise ValueError(f"where_key[{y}] contains out-of-range x index.")
-
         weight = 1.0 / float(x_row.size)
         coeffs: dict[int, float] = {}
         b_count = int(b_cardinality_per_y[y])
         for x in x_row.tolist():
-            k = scenario.key_selection_by_xy
             for b in range(b_count):
-                idx = int(var_index(x, y, b, k[x,y]))
+                if master_key == "Alice":
+                    k = key_lookup[x, y]
+                elif master_key == "Bob":
+                    k = b
+                else:
+                    raise ValueError(f"Invalid holder of the master: {master_key}")
+                idx = int(var_index(x, y, b, k))
                 coeffs[idx] = coeffs.get(idx, 0.0) + weight
 
         idx = np.asarray(list(coeffs.keys()), dtype=int)
