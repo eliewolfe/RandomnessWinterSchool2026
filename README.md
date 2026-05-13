@@ -22,6 +22,11 @@ This separation is central: one scenario can be reused for many protocol choices
 - `QuantumContextualityScenario`: scenario from quantum matrices, converted to GPT internally
 - `ContextualityProtocol`: Alice/Eve metrics and key-rate analysis on top of a scenario
 
+### Vendored SDP helper submodule
+
+- `external/inflation/`: git submodule pinned to the `devel` branch of the upstream `inflation` repository
+- `contextualityqkd/inflation_bridge.py`: path-based loader for selected inflation source files used by the SDP backend
+
 ### Main constructor/factory pipelines
 
 - Generic scenario from data:
@@ -170,22 +175,22 @@ What it does:
 
 ## Running
 
-Per project instructions, use conda env `py13`.
+Per project instructions, use conda env `idp`.
 
 Example commands:
 
 ```powershell
-C:\Users\elupu\miniconda3\Scripts\conda.exe run -n py13 python -m contextualityqkd.demos.qkd_xz_ring
-C:\Users\elupu\miniconda3\Scripts\conda.exe run -n py13 python -m contextualityqkd.demos.qkd_hexagon_projective
-C:\Users\elupu\miniconda3\Scripts\conda.exe run -n py13 python -m contextualityqkd.demos.qkd_peres_24ray
-C:\Users\elupu\miniconda3\Scripts\conda.exe run -n py13 python -m contextualityqkd.demos.qkd_cabello_18ray
-C:\Users\elupu\miniconda3\Scripts\conda.exe run -n py13 python -m contextualityqkd.demos.qkd_porac_3_2
+C:\Users\elupu\miniforge13\Scripts\conda.exe run -n idp python -m contextualityqkd.demos.qkd_xz_ring
+C:\Users\elupu\miniforge13\Scripts\conda.exe run -n idp python -m contextualityqkd.demos.qkd_hexagon_projective
+C:\Users\elupu\miniforge13\Scripts\conda.exe run -n idp python -m contextualityqkd.demos.qkd_peres_24ray
+C:\Users\elupu\miniforge13\Scripts\conda.exe run -n idp python -m contextualityqkd.demos.qkd_cabello_18ray
+C:\Users\elupu\miniforge13\Scripts\conda.exe run -n idp python -m contextualityqkd.demos.qkd_porac_3_2
 ```
 
 Run tests:
 
 ```powershell
-C:\Users\elupu\miniconda3\Scripts\conda.exe run -n py13 python -m unittest discover -s tests -v
+C:\Users\elupu\miniforge13\Scripts\conda.exe run -n idp python -m unittest discover -s tests -v
 ```
 
 ## Minimal Example
@@ -238,5 +243,8 @@ Core runtime dependencies include:
 - `methodtools`
 - `pycddlib`
 - `mosek`
+- `numba`
+- `networkx`
+- `tqdm`
 
 See `pyproject.toml` / `requirements.txt` for full dependency declarations.
