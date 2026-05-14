@@ -19,7 +19,7 @@ from contextualityqkd.quantum import (
 )
 from contextualityqkd.scenario import ContextualityScenario
 
-RUN_SDP = False
+RUN_SDP = True
 
 
 def main() -> None:
@@ -46,12 +46,12 @@ def main() -> None:
         protocol.print_eve_uncertainty_metrics(method="sdp")
         protocol.print_key_rate_summary(method="sdp")
 
-    auto_protocol = ContextualityProtocol(
-        scenario,
-        where_key="Automatic",
-        optimize_verbose=True,
-    )
-    auto_protocol.print_where_key_optimization_best_stage(leading_newline=True)
+    # auto_protocol = ContextualityProtocol(
+    #     scenario,
+    #     where_key="Automatic",
+    #     optimize_verbose=True,
+    # )
+    # auto_protocol.print_where_key_optimization_best_stage(leading_newline=True)
 
     try:
         scenario.print_contextuality_measures(precision=3)

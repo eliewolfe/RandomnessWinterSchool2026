@@ -30,7 +30,7 @@ RUN_SDP = True
 def main() -> None:
     # Keep numerical arrays readable while preserving enough detail.
     np.set_printoptions(precision=6, suppress=True)
-    ContextualityScenario.print_title("QKD: Z and Xmeasurements")
+    ContextualityScenario.print_title("QKD: Z and X measurements")
 
     # ---------------------------------------------------------------------
     # 1) Define the qubit states/effects in ket form on the X-Z great circle.

@@ -128,15 +128,15 @@ def main() -> None:
         sdp_threads=1,
         sdp_verbose=2,
     )
-    bob_protocol = ContextualityProtocol(
-        scenario,
-        where_key=None,
-        master_key_holder="Bob",
-        sdp_projective_bob=True,
-        sdp_projective_eve=True,
-        sdp_threads=1,
-        sdp_verbose=2,
-    )
+    # bob_protocol = ContextualityProtocol(
+    #     scenario,
+    #     where_key=None,
+    #     master_key_holder="Bob",
+    #     sdp_projective_bob=True,
+    #     sdp_projective_eve=True,
+    #     sdp_threads=1,
+    #     sdp_verbose=2,
+    # )
 
     ContextualityScenario.print_title("QKD Protocol: (3,2)-PORAC (ideal noiseless case)")
 
@@ -152,26 +152,26 @@ def main() -> None:
     )
     protocol.print_alice_guessing_metrics()
     protocol.print_alice_uncertainty_metrics()
-    bob_protocol.print_eve_guessing_metrics(method="lp")
-    bob_protocol.print_eve_uncertainty_metrics(method="lp")
-    bob_protocol.print_key_rate_summary(method="lp")
+    # bob_protocol.print_eve_guessing_metrics(method="lp")
+    # bob_protocol.print_eve_uncertainty_metrics(method="lp")
+    # bob_protocol.print_key_rate_summary(method="lp")
     protocol.print_eve_guessing_metrics(method="lp")
     protocol.print_eve_uncertainty_metrics(method="lp")
     protocol.print_key_rate_summary(method="lp")
     if RUN_SDP:
-        bob_protocol.print_eve_guessing_metrics(method="sdp")
-        bob_protocol.print_eve_uncertainty_metrics(method="sdp")
-        bob_protocol.print_key_rate_summary(method="sdp")
+        # bob_protocol.print_eve_guessing_metrics(method="sdp")
+        # bob_protocol.print_eve_uncertainty_metrics(method="sdp")
+        # bob_protocol.print_key_rate_summary(method="sdp")
         protocol.print_eve_guessing_metrics(method="sdp")
         protocol.print_eve_uncertainty_metrics(method="sdp")
         protocol.print_key_rate_summary(method="sdp")
 
-    auto_protocol = ContextualityProtocol(
-        scenario,
-        where_key="Automatic",
-        optimize_verbose=True,
-    )
-    auto_protocol.print_where_key_optimization_best_stage(leading_newline=True)
+    # auto_protocol = ContextualityProtocol(
+    #     scenario,
+    #     where_key="Automatic",
+    #     optimize_verbose=True,
+    # )
+    # auto_protocol.print_where_key_optimization_best_stage(leading_newline=True)
 
     try:
         scenario.print_contextuality_measures(precision=3)
