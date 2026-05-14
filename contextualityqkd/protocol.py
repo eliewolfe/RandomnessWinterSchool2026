@@ -9,7 +9,8 @@ from typing import Literal, Sequence
 
 import numpy as np
 
-from .randomness_lp import _solve_eve_guess_key_by_y_lp_hotstart
+from .eve_lp import _solve_eve_guess_key_by_y_lp_hotstart
+from .eve_sdp import QKDNoncontextualSDP
 from .scenario import ContextualityScenario
 
 
@@ -38,6 +39,12 @@ class ContextualityProtocol:
             "earliest_optimal_stage",
             "latest_optimal_stage",
         ] = "earliest_optimal_stage",
+        sdp_projective_bob: bool = False,
+        sdp_projective_eve: bool = False,
+        sdp_npa_level_bob: int = 1,
+        sdp_npa_level_eve: int = 1,
+        sdp_threads: int | None = None,
+        sdp_verbose: int | bool = 0,
     ) -> None:
         if not isinstance(scenario, ContextualityScenario):
             raise TypeError("scenario must be a ContextualityScenario instance.")
@@ -47,6 +54,12 @@ class ContextualityProtocol:
             raise ValueError("atol must be nonnegative.")
         self._where_key_optimization_result = None
         self.master_key_holder = self._canonicalize_master_key_holder(master_key_holder)
+        self.sdp_projective_bob = bool(sdp_projective_bob)
+        self.sdp_projective_eve = bool(sdp_projective_eve)
+        self.sdp_npa_level_bob = int(sdp_npa_level_bob)
+        self.sdp_npa_level_eve = int(sdp_npa_level_eve)
+        self.sdp_threads = None if sdp_threads is None else int(sdp_threads)
+        self.sdp_verbose = int(sdp_verbose)
 
         if isinstance(where_key, str):
             token = where_key.strip().lower()
@@ -98,6 +111,20 @@ class ContextualityProtocol:
     def min_entropy(p_guess: float) -> float:
         """Return min-entropy in bits from guessing probability."""
         return float(-math.log2(float(p_guess)))
+
+    @classmethod
+    def uncertainty_from_guess(
+        cls,
+        p_guess: float,
+        *,
+        rate_type: Literal["reverse_fano", "min_entropy"] = "reverse_fano",
+    ) -> float:
+        """Convert a guessing probability into an Eve uncertainty bound."""
+        if rate_type == "reverse_fano":
+            return float(cls.reverse_fano_bound(p_guess))
+        if rate_type == "min_entropy":
+            return float(cls.min_entropy(p_guess))
+        raise ValueError("rate_type must be 'reverse_fano' or 'min_entropy'.")
 
     @staticmethod
     def binary_entropy(probability: float, atol: float = 1e-12) -> float:
@@ -785,6 +812,145 @@ class ContextualityProtocol:
         return self.bob_uncertainty_key_by_y if self.master_key_holder == "Alice" else self.alice_uncertainty_bob_by_y_key
 
     @cached_property
+    def other_party_uncertainty_key_weighted(self) -> float:
+        """Other-party uncertainty averaged over key-eligible ``(x,y)`` pairs."""
+        if self.key_pair_count_total == 0:
+            return float("nan")
+        if self.master_key_holder == "Bob":
+            return float(self.alice_uncertainty_bob_key_weighted)
+        weights = self.key_counts_by_y.astype(float)
+        values = np.asarray(self.bob_uncertainty_key_by_y, dtype=float)
+        return float(np.dot(weights, values) / float(np.sum(weights)))
+
+    @cached_property
+    def eve_sdp_solver(self) -> QKDNoncontextualSDP:
+        """Solved Eve SDP for the configured master-key holder and key subset."""
+        solver = QKDNoncontextualSDP(
+            self.scenario,
+            projective_bob=self.sdp_projective_bob,
+            projective_eve=self.sdp_projective_eve,
+            npa_level_bob=self.sdp_npa_level_bob,
+            npa_level_eve=self.sdp_npa_level_eve,
+            master_key_holder=self.master_key_holder,
+            where_key=self.where_key,
+            threads=self.sdp_threads,
+            atol=self.atol,
+            verbose=self.sdp_verbose,
+        )
+        solver.solve_sdp()
+        return solver
+
+    @cached_property
+    def eve_guess_master_key_sdp(self) -> float:
+        """Eve SDP-optimal average guessing probability over key-eligible pairs."""
+        if self.key_pair_count_total == 0:
+            return float("nan")
+        raw_sdp = float(self.eve_sdp_solver.eve_success_probability)
+        # Quantum attacks are contained in the LP attack model. If a chosen SDP
+        # relaxation is looser, report the tighter known LP cap at protocol level.
+        return float(min(raw_sdp, self.eve_guess_master_key_average_y_lp))
+
+    def eve_uncertainty_master_key_sdp(
+        self,
+        *,
+        rate_type: Literal["reverse_fano", "min_entropy"] = "reverse_fano",
+    ) -> float:
+        """Eve uncertainty lower bound from the SDP guessing probability."""
+        sdp_value = float(self.uncertainty_from_guess(self.eve_guess_master_key_sdp, rate_type=rate_type))
+        if rate_type == "reverse_fano":
+            lp_floor = float(self.eve_uncertainty_master_key_reverse_fano_average_y_lp)
+        elif rate_type == "min_entropy":
+            lp_floor = float(self.eve_uncertainty_master_key_min_entropy_average_y_lp)
+        else:
+            raise ValueError("rate_type must be 'reverse_fano' or 'min_entropy'.")
+        # LP provides a valid outer-model bound, so protocol-level SDP reporting
+        # should never be weaker than the LP uncertainty at the same rate type.
+        return float(max(sdp_value, lp_floor))
+
+    def key_rate_per_key_run_sdp(
+        self,
+        *,
+        rate_type: Literal["reverse_fano", "min_entropy"] = "reverse_fano",
+    ) -> float:
+        """Average key bits per key-generating run from the SDP Eve bound."""
+        if self.key_pair_count_total == 0:
+            return float("nan")
+        return float(self.eve_uncertainty_master_key_sdp(rate_type=rate_type) - self.other_party_uncertainty_key_weighted)
+
+    def key_rate_per_experimental_run_sdp(
+        self,
+        *,
+        rate_type: Literal["reverse_fano", "min_entropy"] = "reverse_fano",
+    ) -> float:
+        """Average key bits per experimental run from the SDP Eve bound."""
+        if self.key_pair_count_total == 0:
+            return 0.0
+        return float(self.key_generation_probability_per_run * self.key_rate_per_key_run_sdp(rate_type=rate_type))
+
+    def eve_guessing_probability(
+        self,
+        *,
+        method: Literal["lp", "sdp"] = "lp",
+    ) -> float:
+        """Return Eve's configured-master-key guessing probability."""
+        if method == "lp":
+            return float(self.eve_guess_master_key_average_y_lp)
+        if method == "sdp":
+            return float(self.eve_guess_master_key_sdp)
+        raise ValueError("method must be 'lp' or 'sdp'.")
+
+    def eve_uncertainty(
+        self,
+        *,
+        method: Literal["lp", "sdp"] = "lp",
+        rate_type: Literal["reverse_fano", "min_entropy"] = "reverse_fano",
+    ) -> float:
+        """Return Eve's uncertainty bound for LP or SDP security assumptions."""
+        if method == "lp":
+            if rate_type == "reverse_fano":
+                return float(self.eve_uncertainty_master_key_reverse_fano_average_y_lp)
+            if rate_type == "min_entropy":
+                return float(self.eve_uncertainty_master_key_min_entropy_average_y_lp)
+            raise ValueError("rate_type must be 'reverse_fano' or 'min_entropy'.")
+        if method == "sdp":
+            return float(self.eve_uncertainty_master_key_sdp(rate_type=rate_type))
+        raise ValueError("method must be 'lp' or 'sdp'.")
+
+    def key_rate_per_key_run(
+        self,
+        *,
+        method: Literal["lp", "sdp"] = "lp",
+        rate_type: Literal["reverse_fano", "min_entropy"] = "reverse_fano",
+    ) -> float:
+        """Return key bits per key-generating run for LP or SDP Eve assumptions."""
+        if method == "lp":
+            if rate_type == "reverse_fano":
+                return float(self.key_rate_per_key_run_reverse_fano_lp)
+            if rate_type == "min_entropy":
+                return float(self.key_rate_per_key_run_min_entropy_lp)
+            raise ValueError("rate_type must be 'reverse_fano' or 'min_entropy'.")
+        if method == "sdp":
+            return float(self.key_rate_per_key_run_sdp(rate_type=rate_type))
+        raise ValueError("method must be 'lp' or 'sdp'.")
+
+    def key_rate_per_experimental_run(
+        self,
+        *,
+        method: Literal["lp", "sdp"] = "lp",
+        rate_type: Literal["reverse_fano", "min_entropy"] = "reverse_fano",
+    ) -> float:
+        """Return key bits per experimental run for LP or SDP Eve assumptions."""
+        if method == "lp":
+            if rate_type == "reverse_fano":
+                return float(self.key_rate_per_experimental_run_reverse_fano_lp)
+            if rate_type == "min_entropy":
+                return float(self.key_rate_per_experimental_run_min_entropy_lp)
+            raise ValueError("rate_type must be 'reverse_fano' or 'min_entropy'.")
+        if method == "sdp":
+            return float(self.key_rate_per_experimental_run_sdp(rate_type=rate_type))
+        raise ValueError("method must be 'lp' or 'sdp'.")
+
+    @cached_property
     def eve_uncertainty_key_min_entropy_by_y_lp(self) -> np.ndarray:
         """Eve min-entropy lower-bound vector from LP guessing probabilities."""
         out = np.full_like(self.eve_guess_key_by_y_lp, np.nan, dtype=float)
@@ -1046,6 +1212,122 @@ class ContextualityProtocol:
         """Print reverse-Fano key-rate summary."""
         prefix = "\n" if leading_newline else ""
         print(prefix + self.format_key_rate_summary_reverse_fano_lp(precision=precision))
+
+    def format_eve_guessing_metrics(
+        self,
+        *,
+        method: Literal["lp", "sdp"] = "lp",
+        precision_vector: int = 3,
+        precision_scalar: int = 6,
+    ) -> str:
+        """Format Eve guessing metrics for LP or SDP assumptions."""
+        if method == "lp":
+            return self.format_eve_guessing_metrics_lp(
+                precision_vector=precision_vector,
+                precision_scalar=precision_scalar,
+            )
+        if method != "sdp":
+            raise ValueError("method must be 'lp' or 'sdp'.")
+        lines = [
+            f"Eve SDP guessing metrics, where the master key is held by {self.master_key_holder}:",
+            "P_E^guess(master_key|key-eligible x,y) (SDP) = "
+            f"{ContextualityScenario.format_numeric(self.eve_guess_master_key_sdp, precision=precision_scalar)}",
+        ]
+        return "\n".join(lines)
+
+    def print_eve_guessing_metrics(
+        self,
+        *,
+        method: Literal["lp", "sdp"] = "lp",
+        precision_vector: int = 3,
+        precision_scalar: int = 6,
+        leading_newline: bool = True,
+    ) -> None:
+        """Print Eve guessing metrics for LP or SDP assumptions."""
+        prefix = "\n" if leading_newline else ""
+        print(prefix + self.format_eve_guessing_metrics(
+            method=method,
+            precision_vector=precision_vector,
+            precision_scalar=precision_scalar,
+        ))
+
+    def format_eve_uncertainty_metrics(
+        self,
+        *,
+        method: Literal["lp", "sdp"] = "lp",
+        rate_type: Literal["reverse_fano", "min_entropy"] = "reverse_fano",
+        precision_vector: int = 3,
+        precision_scalar: int = 6,
+    ) -> str:
+        """Format Eve uncertainty metrics for LP or SDP assumptions."""
+        if method == "lp" and rate_type == "reverse_fano":
+            return self.format_eve_uncertainty_metrics_reverse_fano_lp(
+                precision_vector=precision_vector,
+                precision_scalar=precision_scalar,
+            )
+        if method not in {"lp", "sdp"}:
+            raise ValueError("method must be 'lp' or 'sdp'.")
+        label = "reverse-Fano" if rate_type == "reverse_fano" else "min-entropy"
+        lines = [
+            f"Eve uncertainty lower bound ({label}, {method.upper()}), master key held by {self.master_key_holder}:",
+            "H_E(master_key) >= "
+            f"{ContextualityScenario.format_numeric(self.eve_uncertainty(method=method, rate_type=rate_type), precision=precision_scalar)}",
+        ]
+        return "\n".join(lines)
+
+    def print_eve_uncertainty_metrics(
+        self,
+        *,
+        method: Literal["lp", "sdp"] = "lp",
+        rate_type: Literal["reverse_fano", "min_entropy"] = "reverse_fano",
+        precision_vector: int = 3,
+        precision_scalar: int = 6,
+        leading_newline: bool = True,
+    ) -> None:
+        """Print Eve uncertainty metrics for LP or SDP assumptions."""
+        prefix = "\n" if leading_newline else ""
+        print(prefix + self.format_eve_uncertainty_metrics(
+            method=method,
+            rate_type=rate_type,
+            precision_vector=precision_vector,
+            precision_scalar=precision_scalar,
+        ))
+
+    def format_key_rate_summary(
+        self,
+        *,
+        method: Literal["lp", "sdp"] = "lp",
+        rate_type: Literal["reverse_fano", "min_entropy"] = "reverse_fano",
+        header: bool = True,
+        precision: int = 6,
+    ) -> str:
+        """Format key-rate summary for LP or SDP assumptions."""
+        label = "reverse Fano" if rate_type == "reverse_fano" else "min entropy"
+        lines = [
+            "bits per key-generating run = "
+            f"{ContextualityScenario.format_numeric(self.key_rate_per_key_run(method=method, rate_type=rate_type), precision=precision)}",
+            "key-generating run probability per experimental run = "
+            f"{ContextualityScenario.format_numeric(self.key_generation_probability_per_run, precision=precision)}",
+            "bits per experimental run = "
+            f"{ContextualityScenario.format_numeric(self.key_rate_per_experimental_run(method=method, rate_type=rate_type), precision=precision)}",
+        ]
+        if header:
+            lines = [
+                f"Key-rate summary ({label}, {method.upper()}, master key held by {self.master_key_holder}):"
+            ] + lines
+        return "\n".join(lines)
+
+    def print_key_rate_summary(
+        self,
+        *,
+        method: Literal["lp", "sdp"] = "lp",
+        rate_type: Literal["reverse_fano", "min_entropy"] = "reverse_fano",
+        precision: int = 6,
+        leading_newline: bool = True,
+    ) -> None:
+        """Print key-rate summary for LP or SDP assumptions."""
+        prefix = "\n" if leading_newline else ""
+        print(prefix + self.format_key_rate_summary(method=method, rate_type=rate_type, precision=precision))
 
     def _validate_y_distribution(self, y_distribution: np.ndarray | Sequence[float] | None) -> np.ndarray:
         """Validate optional y-distribution and return normalized weights of shape ``(Y,)``."""
