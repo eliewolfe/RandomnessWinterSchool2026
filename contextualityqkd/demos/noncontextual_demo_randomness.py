@@ -28,8 +28,9 @@ effects = [
     GPTContextualityScenario.projector_hs_vector(
         GPTContextualityScenario.xz_plane_ket(k * 2 * sp.pi / nof_effects)
     )    for k in range(nof_effects)]
-measurement_indices = [(k, k+nof_effects/2) for k in range(nof_effects//2)]
-
+measurement_indices = [(2*k % nof_effects,
+                        int(2*k+nof_effects/2) % nof_effects) for k in range(nof_effects//2)]
+# print("Measurement indices:", measurement_indices)
 V_effects = 1
 matrix_id_effect = np.array([0.5, 0, 0, 0.5])
 quantum_effects_noise = V_effects * np.array(effects) + (1 - V_effects) * matrix_id_effect[np.newaxis, :]
