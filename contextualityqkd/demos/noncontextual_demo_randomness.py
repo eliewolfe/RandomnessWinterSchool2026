@@ -2,11 +2,11 @@
 from __future__ import annotations
 from pathlib import Path
 import sys
-import sympy as sp
-
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
+
+import sympy as sp
 import numpy as np
 from contextualityqkd.protocol import ContextualityProtocol
 from contextualityqkd.quantum import GPTContextualityScenario, QuantumContextualityScenario
@@ -53,7 +53,7 @@ protocol = ContextualityProtocol(
     master_key_holder="Bob")
 protocol.print_alice_guessing_metrics()
 protocol.print_alice_uncertainty_metrics()
-protocol.print_eve_guessing_metrics_lp()
-protocol.print_eve_uncertainty_metrics_reverse_fano_lp()
-protocol.print_key_rate_summary_reverse_fano_lp()
+protocol.print_eve_guessing_metrics(method="lp")
+protocol.print_eve_uncertainty_metrics(method="lp")
+protocol.print_key_rate_summary(method="lp")
 scenario.print_contextuality_measures(precision=3)

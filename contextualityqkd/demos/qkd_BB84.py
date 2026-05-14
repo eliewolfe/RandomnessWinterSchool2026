@@ -18,12 +18,13 @@ if str(_REPO_ROOT) not in sys.path:
 import numpy as np
 import sympy as sp
 
+from contextualityqkd.protocol import ContextualityProtocol
 from contextualityqkd.quantum import (
     GPTContextualityScenario,
-    projector_hs_vector,
-    xz_plane_ket,
 )
 from contextualityqkd.scenario import ContextualityScenario
+
+RUN_SDP = True
 
 
 def main() -> None:
@@ -36,10 +37,10 @@ def main() -> None:
     #    - 0 and pi are computational basis |0>,|1> (Z measurement basis)
     #    - +/- pi/2 are |+>,|-> (X basis)
     # ---------------------------------------------------------------------
-    ket0 = xz_plane_ket(0)
-    ket1 = xz_plane_ket(sp.pi)
-    ket_plus = xz_plane_ket(sp.pi / 2)
-    ket_minus = xz_plane_ket(-sp.pi / 2)
+    ket0 = GPTContextualityScenario.xz_plane_ket(0)
+    ket1 = GPTContextualityScenario.xz_plane_ket(sp.pi)
+    ket_plus = GPTContextualityScenario.xz_plane_ket(sp.pi / 2)
+    ket_minus = GPTContextualityScenario.xz_plane_ket(-sp.pi / 2)
     
     state_kets = [ket0, ket1, ket_plus, ket_minus]
     effect_kets = [ket0, ket1, ket_plus, ket_minus]
@@ -62,8 +63,8 @@ def main() -> None:
     # ---------------------------------------------------------------------
     # 3) Convert projectors -> GPT vectors.
     # ---------------------------------------------------------------------
-    gpt_state_set = np.array([projector_hs_vector(ket) for ket in state_kets], dtype=object)
-    gpt_effect_set = np.array([projector_hs_vector(ket) for ket in effect_kets], dtype=object)
+    gpt_state_set = np.array([GPTContextualityScenario.projector_hs_vector(ket) for ket in state_kets], dtype=object)
+    gpt_effect_set = np.array([GPTContextualityScenario.projector_hs_vector(ket) for ket in effect_kets], dtype=object)
 
     # ---------------------------------------------------------------------
     # 4) Build the scenario directly from GPT primitives.
@@ -71,7 +72,6 @@ def main() -> None:
     scenario = GPTContextualityScenario(
         gpt_states=gpt_state_set,
         gpt_effects=gpt_effect_set,
-        preparation_indices=preparation_indices,
         measurement_indices=measurement_indices,
         verbose=False,
     )
@@ -83,13 +83,25 @@ def main() -> None:
     print("\nSymbolic probability table P(a,b|x,y):")
     scenario.print_probabilities(precision=3, representation="symbolic")
 
-    # Guess-who = Bob (master-key choice for this QKD example).
-    scenario.print_guessing_probability_grids(
-        guess_who="Bob",
-        precision=3,
-        include_keyrate_pairs=True,
+    protocol = ContextualityProtocol(
+        scenario,
+        where_key=None,
+        master_key_holder="Bob",
+        sdp_projective_bob=True,
+        sdp_projective_eve=True,
+        sdp_threads=1,
     )
-    scenario.print_contextuality_measures(precision=3)
+    protocol.print_eve_guessing_metrics(method="lp")
+    protocol.print_eve_uncertainty_metrics(method="lp")
+    protocol.print_key_rate_summary(method="lp")
+    if RUN_SDP:
+        protocol.print_eve_guessing_metrics(method="sdp")
+        protocol.print_eve_uncertainty_metrics(method="sdp")
+        protocol.print_key_rate_summary(method="sdp")
+    try:
+        scenario.print_contextuality_measures(precision=3)
+    except ImportError as exc:
+        print(f"\nContextuality measures skipped: {exc}")
 
 
 if __name__ == "__main__":

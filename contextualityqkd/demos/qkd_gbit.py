@@ -20,6 +20,8 @@ from contextualityqkd.quantum import (
 )
 from contextualityqkd.scenario import ContextualityScenario
 
+RUN_SDP = True
+
 states = [  GPTContextualityScenario.projector_hs_vector(GPTContextualityScenario.xz_plane_ket(0*sp.pi/2)),
             GPTContextualityScenario.projector_hs_vector(GPTContextualityScenario.xz_plane_ket(1*sp.pi/2)),
             GPTContextualityScenario.projector_hs_vector(GPTContextualityScenario.xz_plane_ket(2*sp.pi/2)),
@@ -53,10 +55,19 @@ scenario = GPTContextualityScenario(
 # scenario.print_operational_equivalences(precision=3, representation="symbolic")
 
 
-protocol = ContextualityProtocol(scenario, where_key=[(0,1,2,3),(0,1,2,3)])
+protocol = ContextualityProtocol(
+    scenario,
+    where_key=[(0,1,2,3),(0,1,2,3)],
+    sdp_projective_bob=True,
+    sdp_projective_eve=True,
+)
 
 protocol.print_alice_guessing_metrics()
 protocol.print_alice_uncertainty_metrics()
-protocol.print_eve_guessing_metrics_lp()
-protocol.print_eve_uncertainty_metrics_reverse_fano_lp()
-protocol.print_key_rate_summary_reverse_fano_lp()
+protocol.print_eve_guessing_metrics(method="lp")
+protocol.print_eve_uncertainty_metrics(method="lp")
+protocol.print_key_rate_summary(method="lp")
+if RUN_SDP:
+    protocol.print_eve_guessing_metrics(method="sdp")
+    protocol.print_eve_uncertainty_metrics(method="sdp")
+    protocol.print_key_rate_summary(method="sdp")

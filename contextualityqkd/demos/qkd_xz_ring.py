@@ -19,6 +19,7 @@ from contextualityqkd.quantum import (
 )
 from contextualityqkd.scenario import ContextualityScenario
 
+RUN_SDP = False
 
 
 NUM_MEAS = 8
@@ -137,11 +138,18 @@ def main() -> None:
     protocol.print_where_key_optimization_best_stage(leading_newline=True)
     # protocol.print_alice_guessing_metrics()
     # protocol.print_alice_uncertainty_metrics()
-    # protocol.print_eve_guessing_metrics_lp()
-    # protocol.print_eve_uncertainty_metrics_reverse_fano_lp()
-    protocol.print_key_rate_summary_reverse_fano_lp()
+    protocol.print_eve_guessing_metrics(method="lp")
+    protocol.print_eve_uncertainty_metrics(method="lp")
+    protocol.print_key_rate_summary(method="lp")
+    if RUN_SDP:
+        protocol.print_eve_guessing_metrics(method="sdp")
+        protocol.print_eve_uncertainty_metrics(method="sdp")
+        protocol.print_key_rate_summary(method="sdp")
 
-    scenario.print_contextuality_measures(precision=3)
+    try:
+        scenario.print_contextuality_measures(precision=3)
+    except ImportError as exc:
+        print(f"\nContextuality measures skipped: {exc}")
 
 
 if __name__ == "__main__":
