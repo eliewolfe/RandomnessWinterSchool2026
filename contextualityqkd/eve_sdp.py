@@ -136,14 +136,15 @@ class MomentMatrixTemplate:
         for op in self.operators:
             if not self._is_projective_operator(op):
                 continue
-            idx = self.word_index((op.lex_index,))
-            if idx is None:
+            entry_pp = self.representative_entry_for_word((op.lex_index, op.lex_index))
+            entry_p = self.representative_entry_for_word((op.lex_index,))
+            if entry_pp is None or entry_p is None:
                 continue
             constraints.append(
                 LinearMomentConstraint(
                     terms=[
-                        (prep_index, idx, idx, 1.0),
-                        (prep_index, 0, idx, -1.0),
+                        (prep_index, int(entry_pp[0]), int(entry_pp[1]), 1.0),
+                        (prep_index, int(entry_p[0]), int(entry_p[1]), -1.0),
                     ],
                     rhs=0.0,
                     name=f"idempotent_x{prep_index}_{op.party}{op.setting}_{op.outcome}",
@@ -154,13 +155,14 @@ class MomentMatrixTemplate:
         for op in self.operators:
             if self._is_projective_operator(op) or op.kind != "unitary":
                 continue
-            idx = self.word_index((op.lex_index,))
-            adj_idx = self.word_index((op.adjoint_lex_index,))
-            if idx is None or adj_idx is None:
+            entry_diag = self.representative_entry_for_word((op.adjoint_lex_index, op.lex_index))
+            entry_u = self.representative_entry_for_word((op.lex_index,))
+            entry_ud = self.representative_entry_for_word((op.adjoint_lex_index,))
+            if entry_diag is None or entry_u is None or entry_ud is None:
                 continue
             constraints.append(
                 LinearMomentConstraint(
-                    terms=[(prep_index, idx, idx, 1.0)],
+                    terms=[(prep_index, int(entry_diag[0]), int(entry_diag[1]), 1.0)],
                     rhs=1.0,
                     name=f"unitary_diag_x{prep_index}_{op.party}{op.setting}_{op.outcome}_{int(op.is_dagger)}",
                 )
@@ -168,8 +170,8 @@ class MomentMatrixTemplate:
             constraints.append(
                 LinearMomentConstraint(
                     terms=[
-                        (prep_index, 0, idx, 1.0),
-                        (prep_index, adj_idx, 0, -1.0),
+                        (prep_index, int(entry_u[0]), int(entry_u[1]), 1.0),
+                        (prep_index, int(entry_ud[0]), int(entry_ud[1]), -1.0),
                     ],
                     rhs=0.0,
                     name=f"unitary_conj_1_x{prep_index}_{op.party}{op.setting}_{op.outcome}_{int(op.is_dagger)}",
@@ -178,8 +180,8 @@ class MomentMatrixTemplate:
             constraints.append(
                 LinearMomentConstraint(
                     terms=[
-                        (prep_index, idx, 0, 1.0),
-                        (prep_index, 0, adj_idx, -1.0),
+                        (prep_index, int(entry_ud[0]), int(entry_ud[1]), 1.0),
+                        (prep_index, int(entry_u[0]), int(entry_u[1]), -1.0),
                     ],
                     rhs=0.0,
                     name=f"unitary_conj_2_x{prep_index}_{op.party}{op.setting}_{op.outcome}_{int(op.is_dagger)}",
@@ -220,9 +222,9 @@ class MomentMatrixTemplate:
                             if abs(coeff) <= 0.0:
                                 continue
                             idx = self.find_operator(party, y, b)
-                            col = self.word_index((idx,)) if idx is not None else None
-                            if col is not None:
-                                terms.append((prep_index, row_index, col, coeff))
+                            entry = self.entry_for_row_right_word(row_index, (int(idx),)) if idx is not None else None
+                            if entry is not None:
+                                terms.append((prep_index, int(entry[0]), int(entry[1]), coeff))
                         continue
 
                     # Nonprojective: sum_b beta_b M_b(row)=0 with
@@ -238,12 +240,14 @@ class MomentMatrixTemplate:
                             continue
                         u = self.find_operator(party, y, b, is_dagger=False)
                         ud = self.find_operator(party, y, b, is_dagger=True)
-                        u_col = self.word_index((u,)) if u is not None else None
-                        ud_col = self.word_index((ud,)) if ud is not None else None
-                        if u_col is not None:
-                            terms.append((prep_index, row_index, u_col, eff_coeff))
-                        if ud_col is not None:
-                            terms.append((prep_index, row_index, ud_col, eff_coeff))
+                        if u is not None:
+                            entry_u = self.entry_for_row_right_word(row_index, (int(u),))
+                            if entry_u is not None:
+                                terms.append((prep_index, int(entry_u[0]), int(entry_u[1]), eff_coeff))
+                        if ud is not None:
+                            entry_ud = self.entry_for_row_right_word(row_index, (int(ud),))
+                            if entry_ud is not None:
+                                terms.append((prep_index, int(entry_ud[0]), int(entry_ud[1]), eff_coeff))
 
                 if terms:
                     constraints.append(
@@ -262,6 +266,33 @@ class MomentMatrixTemplate:
             return None
         return self.word_to_index.get(canonical)
 
+    def representative_entry_for_word(self, word: tuple[int, ...]) -> tuple[int, int] | None:
+        """Return representative (row,col) for the canonical label of ``word``."""
+        canonical = self.canonical_word(word)
+        if canonical is _ZERO_MONOMIAL:
+            return None
+        return self._representative_entry_for_label(canonical)
+
+    def entry_for_row_right_word(self, row_index: int, right_word: tuple[int, ...]) -> tuple[int, int] | None:
+        """Return representative entry for ``<row_word^† * right_word>``."""
+        row_word = self.row_mapping[int(row_index)]
+        label = self.canonical_word(self._adjoint_word(row_word) + tuple(int(v) for v in right_word))
+        if label is _ZERO_MONOMIAL:
+            return None
+        assert label is not None
+        return self._representative_entry_for_label(label)
+
+    def _representative_entry_for_label(self, label: tuple[int, ...]) -> tuple[int, int] | None:
+        rep = self.entry_representatives.get(label)
+        if rep is not None:
+            return rep
+        # Representatives are stored from lower-triangular entries only; if a
+        # label appears only in upper-triangular form, resolve via its adjoint.
+        adj = self.canonical_word(self._adjoint_word(label))
+        if adj is _ZERO_MONOMIAL or adj is None:
+            return None
+        return self.entry_representatives.get(adj)
+
     def find_operator(
         self,
         party: str,
@@ -279,6 +310,7 @@ class MomentMatrixTemplate:
             return _IDENTITY
         canonical = tuple(int(v) for v in np.asarray(nb_lexmon_to_canonical(lexmon, self.notcomm), dtype=int))
         return self._apply_operator_rules(canonical)
+
 
     def _build_entry_consistency(self) -> None:
         for row, row_word in enumerate(self.operator_sequence):
@@ -373,6 +405,7 @@ class QKDNoncontextualSDP:
         npa_level_eve: int = 1,
         master_key_holder: Literal["Alice", "Bob"] | str = "Alice",
         where_key: Sequence[Sequence[int]] | None = None,
+        use_u_only: bool = False,
         threads: int | None = None,
         atol: float | None = None,
         verbose: int | bool = 0,
@@ -386,6 +419,7 @@ class QKDNoncontextualSDP:
         self.npa_level_eve = self._validate_level(npa_level_eve, "npa_level_eve")
         self.master_key_holder = self._canonicalize_master_key_holder(master_key_holder)
         self.where_key = self._normalize_where_key(where_key)
+        self.use_u_only = bool(use_u_only)
         self.threads = None if threads is None else int(threads)
         self.atol = scenario.atol if atol is None else float(atol)
         self.verbose = int(verbose)
@@ -525,6 +559,8 @@ class QKDNoncontextualSDP:
                 f"complex {dim}x{dim} embedded as real {real_dim}x{real_dim} "
                 f"(symmetric packed={packed})",
             )
+        if self.verbose >= 1 and self.use_u_only:
+            self._log(1, "[eve_sdp] U-only generator mode: dagger operators excluded from NPA word sequence.")
         return list(self.moment_matrices)
 
     def apply_observed_data_constraints(self) -> list[LinearMomentConstraint]:
@@ -611,17 +647,22 @@ class QKDNoncontextualSDP:
             )
 
         assert self.template is not None
+        self._log(
+            1,
+            f"[eve_sdp] solving (complex-embedded SDP) with {len(self.constraints)} affine constraints and "
+            f"{self.scenario.X_cardinality} PSD block(s)",
+        )
         with mosek.Env() as env:
             with env.Task(0, 0) as task:
                 if self.verbose >= 2:
                     task.set_Stream(mosek.streamtype.log, lambda msg: print(msg, end=""))
                 self._build_mosek_task(task)
-                self._log(
-                    1,
-                    f"[eve_sdp] solving with {len(self.constraints)} affine constraints and "
-                    f"{self.scenario.X_cardinality} PSD blocks",
-                )
                 termination_code = task.optimize()
+                self._assert_mosek_solution_is_not_infeasible_or_unbounded(
+                    task,
+                    termination_code=termination_code,
+                    failure_context="Eve SDP",
+                )
                 objective = self._get_optimal_primal_objective(task, termination_code)
                 self.eve_success_probability = float(objective)
                 self.solution_matrices_real = self._extract_solution_matrices_real(task)
@@ -672,8 +713,15 @@ class QKDNoncontextualSDP:
         raise ValueError("rate_type must be 'reverse_fano' or 'min_entropy'.")
 
     def _build_operator_sequence(self) -> list[tuple[int, ...]]:
-        bob = [op.lex_index for op in self.operators if op.party == "B"]
-        eve = [op.lex_index for op in self.operators if op.party == "E"]
+        def _party_generator_indices(party: str) -> list[int]:
+            ops = [op for op in self.operators if op.party == party]
+            if self.use_u_only:
+                # Restrict to non-dagger unitaries and all projectors (no U†).
+                ops = [op for op in ops if not (op.kind == "unitary" and op.is_dagger)]
+            return [op.lex_index for op in ops]
+
+        bob = _party_generator_indices("B")
+        eve = _party_generator_indices("E")
         template = MomentMatrixTemplate(
             operator_sequence=[_IDENTITY],
             operators=self.operators,
@@ -938,10 +986,10 @@ class QKDNoncontextualSDP:
         assert self.template is not None
         out: list[tuple[int, int, int, float]] = []
         for word, coeff in self._effect_affine_words(party, y, b):
-            col = self.template.word_index(word)
-            if col is None:
+            entry = self.template.entry_for_row_right_word(0, word)
+            if entry is None:
                 continue
-            out.append((prep_index, 0, int(col), float(coeff)))
+            out.append((prep_index, int(entry[0]), int(entry[1]), float(coeff)))
         return out
 
     def _joint_probability_terms(self, prep_index: int, y: int, b: int, e: int) -> list[tuple[int, int, int, float]]:
@@ -951,10 +999,10 @@ class QKDNoncontextualSDP:
         e_terms = self._effect_affine_words("E", y, e)
         for b_word, b_coeff in b_terms:
             for e_word, e_coeff in e_terms:
-                col = self.template.word_index(b_word + e_word)
-                if col is None:
+                entry = self.template.entry_for_row_right_word(0, b_word + e_word)
+                if entry is None:
                     continue
-                out.append((prep_index, 0, int(col), float(b_coeff * e_coeff)))
+                out.append((prep_index, int(entry[0]), int(entry[1]), float(b_coeff * e_coeff)))
         return out
 
     def _normalize_key_selection(
@@ -1040,9 +1088,10 @@ class QKDNoncontextualSDP:
             total += float(-np.sum(joint[positive] * np.log2(cond[positive]))) * float(len(row))
         return float(total / float(self.objective_pair_count))
 
+
     def _build_mosek_task(self, task: mosek.Task) -> None:
         assert self.template is not None
-        dim = self.template.real_dimension
+        dim = int(self.template.real_dimension)
 
         expanded_rows: list[tuple[str, float, list[tuple[int, int, int, float]]]] = []
         for constraint in self.constraints:
@@ -1193,7 +1242,7 @@ class QKDNoncontextualSDP:
 
     def _extract_solution_matrices_real(self, task: mosek.Task) -> list[np.ndarray]:
         assert self.template is not None
-        dim = self.template.real_dimension
+        dim = int(self.template.real_dimension)
         packed_size = dim * (dim + 1) // 2
         matrices: list[np.ndarray] = []
         for x in range(self.scenario.X_cardinality):
@@ -1243,6 +1292,35 @@ class QKDNoncontextualSDP:
                 return float(task.getprimalobj(soltype))
         trm = f" termination={termination_code}." if termination_code is not None else ""
         raise RuntimeError(f"SDP solve failed: MOSEK did not return an optimal solution.{trm} {' | '.join(statuses)}")
+
+    @staticmethod
+    def _assert_mosek_solution_is_not_infeasible_or_unbounded(
+        task: mosek.Task,
+        *,
+        termination_code: object | None = None,
+        failure_context: str = "SDP",
+    ) -> None:
+        """Assert that MOSEK did not certify infeasibility/unboundedness."""
+        bad_prosta_tokens = ("prim_infeas", "dual_infeas", "prim_and_dual_infeas", "ill_posed")
+        status_report: list[str] = []
+        for soltype in (mosek.soltype.itr, mosek.soltype.bas):
+            try:
+                solsta = task.getsolsta(soltype)
+            except mosek.Error:
+                status_report.append(f"{soltype}: solsta unavailable")
+                continue
+            try:
+                prosta = task.getprosta(soltype)
+            except mosek.Error:
+                prosta = "unavailable"
+            status_report.append(f"{soltype}: solsta={solsta}, prosta={prosta}")
+            prosta_str = str(prosta).lower()
+            if any(token in prosta_str for token in bad_prosta_tokens):
+                trm = f" termination={termination_code}." if termination_code is not None else ""
+                raise AssertionError(
+                    f"{failure_context} returned an invalid MOSEK problem status ({prosta}).{trm} "
+                    f"statuses: {' | '.join(status_report)}"
+                )
 
 
     @staticmethod

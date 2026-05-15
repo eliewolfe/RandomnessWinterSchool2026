@@ -210,6 +210,11 @@ def _solve_eve_guess_key_by_y_lp_hotstart(
 
                 task.putclist(idx.tolist(), val.tolist())
                 termination_code = task.optimize()
+                _assert_mosek_solution_is_not_infeasible_or_unbounded(
+                    task,
+                    termination_code=termination_code,
+                    failure_context=f"Bob-guessing LP for y={y}",
+                )
                 out[y] = _get_optimal_primal_objective(
                     task,
                     failure_context=(f"Bob-guessing LP for y={y}"),
@@ -250,3 +255,33 @@ def _get_optimal_primal_objective(
         f"{context_prefix}LP solve failed: MOSEK did not return an optimal solution.{trm} "
         f"statuses: {status_text}"
     )
+
+
+def _assert_mosek_solution_is_not_infeasible_or_unbounded(
+    task: mosek.Task,
+    *,
+    termination_code: object | None = None,
+    failure_context: str = "LP",
+) -> None:
+    """Assert that MOSEK did not certify infeasibility/unboundedness."""
+    bad_prosta_tokens = ("prim_infeas", "dual_infeas", "prim_and_dual_infeas", "ill_posed")
+    status_report: list[str] = []
+    for soltype in (mosek.soltype.itr, mosek.soltype.bas):
+        try:
+            solsta = task.getsolsta(soltype)
+        except mosek.Error:
+            status_report.append(f"{soltype}: solsta unavailable")
+            continue
+        try:
+            prosta = task.getprosta(soltype)
+        except mosek.Error:
+            prosta = "unavailable"
+        status_report.append(f"{soltype}: solsta={solsta}, prosta={prosta}")
+        prosta_str = str(prosta).lower()
+        if any(token in prosta_str for token in bad_prosta_tokens):
+            trm = f" termination={termination_code}." if termination_code is not None else ""
+            raise AssertionError(
+                f"{failure_context} returned an invalid MOSEK problem status ({prosta}).{trm} "
+                f"statuses: {' | '.join(status_report)}"
+            )
+
