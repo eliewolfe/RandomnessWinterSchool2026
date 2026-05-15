@@ -90,6 +90,7 @@ def main() -> None:
         sdp_projective_eve=False,
         sdp_npa_level_bob=1,
         sdp_npa_level_eve=1,
+        sdp_use_u_only=True,
         sdp_threads=1,
         sdp_verbose=2,
     )

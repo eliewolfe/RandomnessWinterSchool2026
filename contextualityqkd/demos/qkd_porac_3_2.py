@@ -119,21 +119,20 @@ def main() -> None:
     np.set_printoptions(precision=6, suppress=True)
     scenario = build_porac_scenario(eta=1.0)
     # Important caveat for comparing against the article:
-    # - We explicitly assume Bob's measurements are projective below.
-    # - This is the usual extra assumption in many SDP analyses, but it is not
-    #   justified in a fully device-independent operational model.
-    # - We adopt it here to force the code path that reports a positive PORAC
-    #   key-rate region consistent with the article's projection-based
-    #   relaxation (Q^Pi_{1+BE}).
+    # - We run the nonprojective Naimark-unitary pathway (Bob/Eve not assumed
+    #   projective in the solver constraints).
+    # - The U-only generator trick is enabled to reduce SDP size while keeping
+    #   the nonprojective constraint model active.
     protocol = ContextualityProtocol(
         scenario=scenario,
         where_key=None,
         master_key_holder="Alice",
         atol=1e-9,
-        sdp_projective_bob=True,
+        sdp_projective_bob=False,
         sdp_projective_eve=False,
         sdp_npa_level_bob=1,
         sdp_npa_level_eve=1,
+        sdp_use_u_only=True,   # U-only generator set: smaller SDP, much faster
         sdp_threads=1,
         sdp_verbose=2,
     )

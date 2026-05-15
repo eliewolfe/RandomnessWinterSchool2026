@@ -58,11 +58,9 @@ protocol = ContextualityProtocol(
     where_key=None,  # where_key=None → all x for every y
     master_key_holder="Bob",
     atol=1e-9,
-    sdp_threads=None,
-    sdp_verbose=0,
 )
 protocol.print_eve_security_metrics(
-    method="both",
+    method="lp",
     rate_type="reverse_fano",
     include_per_y_lp=False,
     precision_vector=3,

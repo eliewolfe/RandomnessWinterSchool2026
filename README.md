@@ -59,6 +59,15 @@ protocol = ContextualityProtocol(
 
 Set `master_key_holder="Bob"` to recover the older Bob-held-key convention.
 
+### SDP speed knob (now defaulted)
+
+`ContextualityProtocol` exposes `sdp_use_u_only` (default `True`).
+
+- `True`: build NPA words from `U` generators only (dagger words are still handled via moment-entry identities), usually much faster in nonprojective runs.
+- `False`: use both `U` and `U†` as explicit generators (larger SDP).
+
+If `sdp_use_u_only=True` fails (e.g., infeasible relaxation on a specific scenario), the protocol layer retries once with full `U/U†` generators.
+
 ## 2) Automatic `where_key` optimization (built in)
 
 Use this to automatically sweep admissible key sets and choose the best stage by reverse-Fano bits per experimental run:
@@ -177,7 +186,8 @@ What it does:
 
 - builds true quantum PORAC scenario via `QuantumContextualityScenario.from_quantum_states_effects`
 - validates discovered preparation-OPEQ subspace against article constraints
-- runs baseline protocol with `where_key=None`
+- runs baseline protocol with `where_key=None` on the nonprojective Naimark pathway (`sdp_projective_bob=False`, `sdp_projective_eve=False`)
+- enables `sdp_use_u_only=True` to keep the nonprojective SDP tractable
 - runs automatic optimization stage and prints best-stage summary
 
 ## Running
