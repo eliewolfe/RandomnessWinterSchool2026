@@ -1,9 +1,10 @@
-"""Semi-device-independent Eve SDP relaxations for Bob-outcome scenarios.
+"""Manuscript-faithful SDP backend for contextuality-QKD Eve bounds.
 
-The implementation builds one real symmetric moment matrix per preparation.
-Moment entries are constrained by observed Bob data, preparation and Bob
-measurement operational equivalences, and Bob/Eve marginal consistency.  The
-SDP maximizes Eve's probability of guessing a selected key outcome.
+Nonprojective measurements follow Appendix B's Naimark-unitary construction:
+- Explicit generators U_k^y and (U_k^y)^dagger for k in [0, K_y-2]
+- Last outcome eliminated via completeness identities (Eqs. (11)-(12))
+- Data constraints in Eq. (8) form
+- Measurement OPEQ constraints in Eq. (10) form
 """
 
 from __future__ import annotations
@@ -23,12 +24,7 @@ _VENDORED_INFLATION_ROOT = _REPO_ROOT / "external" / "inflation"
 if _VENDORED_INFLATION_ROOT.exists() and str(_VENDORED_INFLATION_ROOT) not in sys.path:
     sys.path.insert(0, str(_VENDORED_INFLATION_ROOT))
 
-from inflation.sdp.fast_npa import (  # noqa: E402
-    commutation_matrix,
-    nb_is_physical,
-    nb_lexmon_to_canonical,
-    remove_projector_squares,
-)
+from inflation.sdp.fast_npa import nb_lexmon_to_canonical  # noqa: E402
 
 from .scenario import ContextualityScenario
 
@@ -39,36 +35,41 @@ _ZERO_MONOMIAL: None = None
 
 @dataclass(frozen=True, order=True)
 class Operator:
-    """One Bob or Eve measurement effect."""
+    """One primitive operator in the noncommutative alphabet."""
 
     party: str
     setting: int
     outcome: int
     lex_index: int
+    kind: Literal["projector", "unitary"]
+    is_dagger: bool = False
+    adjoint_lex_index: int = -1
 
     @property
     def party_index(self) -> int:
         return 1 if self.party == "B" else 2
 
     def as_fast_npa_row(self) -> list[int]:
-        # [party, source-copy, setting, outcome] matches fast_npa's convention
-        # that the last two columns are setting and outcome labels.
+        # Use distinct outcome slots for U and U† so fast_npa ordering keeps both symbols.
+        if self.kind == "unitary":
+            outcome_slot = (2 * self.outcome) + (1 if self.is_dagger else 0)
+            return [self.party_index, 1, self.setting + 1, outcome_slot + 1]
         return [self.party_index, 1, self.setting + 1, self.outcome + 1]
 
 
 @dataclass
 class LinearMomentConstraint:
-    """A scalar affine equality in moment-matrix entries."""
+    """A scalar affine constraint over moment entries."""
 
-    terms: list[tuple[int, int, int, float]]
-    rhs: float = 0.0
+    terms: list[tuple[int, int, int, complex]]
+    rhs: complex = 0.0
     name: str = ""
-    domain: str = "zero"
+    domain: str = "zero_complex"
 
 
 @dataclass
 class MomentMatrixTemplate:
-    """Template shared by all preparation-indexed moment matrices."""
+    """Shared template for all preparation-indexed moment matrices."""
 
     operator_sequence: list[tuple[int, ...]]
     operators: list[Operator]
@@ -77,15 +78,26 @@ class MomentMatrixTemplate:
     projective_eve: bool = False
     row_mapping: dict[int, tuple[int, ...]] = field(init=False)
     col_mapping: dict[int, tuple[int, ...]] = field(init=False)
+    word_to_index: dict[tuple[int, ...], int] = field(init=False)
     measurement_column_constraints: list[LinearMomentConstraint] = field(default_factory=list)
     entry_labels: dict[tuple[int, int], tuple[int, ...] | None] = field(init=False)
     entry_representatives: dict[tuple[int, ...], tuple[int, int]] = field(init=False)
     zero_entries: list[tuple[int, int]] = field(init=False)
     consistency_pairs: list[tuple[tuple[int, int], tuple[int, int]]] = field(init=False)
+    _effect_index: dict[tuple[str, int, int], int] = field(init=False)
+    _unitary_index: dict[tuple[str, int, int, bool], int] = field(init=False)
 
     def __post_init__(self) -> None:
         self.row_mapping = {i: word for i, word in enumerate(self.operator_sequence)}
         self.col_mapping = dict(self.row_mapping)
+        self.word_to_index = {word: idx for idx, word in self.row_mapping.items()}
+        self._effect_index = {}
+        self._unitary_index = {}
+        for op in self.operators:
+            if op.kind == "projector":
+                self._effect_index[(op.party, op.setting, op.outcome)] = op.lex_index
+            else:
+                self._unitary_index[(op.party, op.setting, op.outcome, op.is_dagger)] = op.lex_index
         self.entry_labels = {}
         self.entry_representatives = {}
         self.zero_entries = []
@@ -96,14 +108,14 @@ class MomentMatrixTemplate:
     def dimension(self) -> int:
         return len(self.operator_sequence)
 
-    def generate_sdp_variable(self, prep_index: int) -> "MomentMatrix":
-        """Create a preparation-specific matrix placeholder."""
+    @property
+    def real_dimension(self) -> int:
+        return 2 * int(self.dimension)
 
-        return MomentMatrix.from_template(self, prep_index=prep_index)
+    def generate_sdp_variable(self, prep_index: int) -> "MomentMatrix":
+        return MomentMatrix(template=self, prep_index=int(prep_index))
 
     def apply_operator_constraints(self, prep_index: int) -> list[LinearMomentConstraint]:
-        """Return normalization, zero, and projective-idempotency constraints."""
-
         constraints = [
             LinearMomentConstraint(
                 terms=[(prep_index, 0, 0, 1.0)],
@@ -120,23 +132,60 @@ class MomentMatrixTemplate:
                 )
             )
 
+        # Projective idempotency for primitive projectors.
         for op in self.operators:
             if not self._is_projective_operator(op):
                 continue
-            op_word = (op.lex_index,)
-            op_idx = self.word_index(op_word)
-            if op_idx is None:
+            idx = self.word_index((op.lex_index,))
+            if idx is None:
                 continue
             constraints.append(
                 LinearMomentConstraint(
                     terms=[
-                        (prep_index, op_idx, op_idx, 1.0),
-                        (prep_index, 0, op_idx, -1.0),
+                        (prep_index, idx, idx, 1.0),
+                        (prep_index, 0, idx, -1.0),
                     ],
                     rhs=0.0,
                     name=f"idempotent_x{prep_index}_{op.party}{op.setting}_{op.outcome}",
                 )
             )
+
+        # Appendix-B style unitarity/conjugacy constraints for nonprojective generators.
+        for op in self.operators:
+            if self._is_projective_operator(op) or op.kind != "unitary":
+                continue
+            idx = self.word_index((op.lex_index,))
+            adj_idx = self.word_index((op.adjoint_lex_index,))
+            if idx is None or adj_idx is None:
+                continue
+            constraints.append(
+                LinearMomentConstraint(
+                    terms=[(prep_index, idx, idx, 1.0)],
+                    rhs=1.0,
+                    name=f"unitary_diag_x{prep_index}_{op.party}{op.setting}_{op.outcome}_{int(op.is_dagger)}",
+                )
+            )
+            constraints.append(
+                LinearMomentConstraint(
+                    terms=[
+                        (prep_index, 0, idx, 1.0),
+                        (prep_index, adj_idx, 0, -1.0),
+                    ],
+                    rhs=0.0,
+                    name=f"unitary_conj_1_x{prep_index}_{op.party}{op.setting}_{op.outcome}_{int(op.is_dagger)}",
+                )
+            )
+            constraints.append(
+                LinearMomentConstraint(
+                    terms=[
+                        (prep_index, idx, 0, 1.0),
+                        (prep_index, 0, adj_idx, -1.0),
+                    ],
+                    rhs=0.0,
+                    name=f"unitary_conj_2_x{prep_index}_{op.party}{op.setting}_{op.outcome}_{int(op.is_dagger)}",
+                )
+            )
+
         return constraints
 
     def apply_measurement_opeq_constraints(
@@ -144,30 +193,58 @@ class MomentMatrixTemplate:
         prep_index: int,
         opeq_meas: np.ndarray,
         *,
+        b_cardinality_per_y: np.ndarray,
         party: str = "B",
     ) -> list[LinearMomentConstraint]:
-        """Apply OEM equalities as column-level moment constraints."""
+        """Apply measurement OPEQs; nonprojective mode uses Eq. (10)-(12) structure."""
 
         constraints: list[LinearMomentConstraint] = []
         coeffs_arr = np.asarray(opeq_meas, dtype=float)
         if coeffs_arr.ndim == 2:
             coeffs_arr = coeffs_arr[np.newaxis, :, :]
 
+        is_projective = (party == "B" and self.projective_bob) or (party == "E" and self.projective_eve)
         for k, coeffs in enumerate(coeffs_arr):
-            nz_y, nz_b = np.nonzero(np.abs(coeffs) > 0.0)
-            if nz_y.size == 0:
-                continue
             for row_index in range(self.dimension):
                 terms: list[tuple[int, int, int, float]] = []
-                row_word = self.operator_sequence[row_index]
-                for y, b in zip(nz_y.tolist(), nz_b.tolist()):
-                    op_idx = self.find_operator(party, y, b)
-                    if op_idx is None:
+                for y in range(coeffs.shape[0]):
+                    b_count = int(b_cardinality_per_y[y])
+                    if b_count <= 0:
                         continue
-                    col_index = self.word_index((op_idx,))
-                    if col_index is None:
+                    if is_projective:
+                        beta_last = float(coeffs[y, b_count - 1])
+                        if abs(beta_last) > 0.0:
+                            terms.append((prep_index, row_index, 0, beta_last))
+                        for b in range(max(0, b_count - 1)):
+                            coeff = float(coeffs[y, b]) - beta_last
+                            if abs(coeff) <= 0.0:
+                                continue
+                            idx = self.find_operator(party, y, b)
+                            col = self.word_index((idx,)) if idx is not None else None
+                            if col is not None:
+                                terms.append((prep_index, row_index, col, coeff))
                         continue
-                    terms.append((prep_index, row_index, col_index, float(coeffs[y, b])))
+
+                    # Nonprojective: sum_b beta_b M_b(row)=0 with
+                    # M_k = I/2 + (U_k + U_k†)/4 and M_{K-1} eliminated.
+                    beta_last = float(coeffs[y, b_count - 1])
+                    beta_except = float(np.sum(coeffs[y, : max(0, b_count - 1)]))
+                    id_coeff = 0.5 * beta_except + 0.5 * (3.0 - float(b_count)) * beta_last
+                    if abs(id_coeff) > 0.0:
+                        terms.append((prep_index, row_index, 0, id_coeff))
+                    for b in range(max(0, b_count - 1)):
+                        eff_coeff = 0.25 * (float(coeffs[y, b]) - beta_last)
+                        if abs(eff_coeff) <= 0.0:
+                            continue
+                        u = self.find_operator(party, y, b, is_dagger=False)
+                        ud = self.find_operator(party, y, b, is_dagger=True)
+                        u_col = self.word_index((u,)) if u is not None else None
+                        ud_col = self.word_index((ud,)) if ud is not None else None
+                        if u_col is not None:
+                            terms.append((prep_index, row_index, u_col, eff_coeff))
+                        if ud_col is not None:
+                            terms.append((prep_index, row_index, ud_col, eff_coeff))
+
                 if terms:
                     constraints.append(
                         LinearMomentConstraint(
@@ -183,28 +260,31 @@ class MomentMatrixTemplate:
         canonical = self.canonical_word(word)
         if canonical is _ZERO_MONOMIAL:
             return None
-        try:
-            return self.operator_sequence.index(canonical)
-        except ValueError:
-            return None
+        return self.word_to_index.get(canonical)
 
-    def find_operator(self, party: str, setting: int, outcome: int) -> int | None:
-        for op in self.operators:
-            if op.party == party and op.setting == setting and op.outcome == outcome:
-                return op.lex_index
-        return None
+    def find_operator(
+        self,
+        party: str,
+        setting: int,
+        outcome: int,
+        is_dagger: bool | None = None,
+    ) -> int | None:
+        if is_dagger is None:
+            return self._effect_index.get((party, setting, outcome))
+        return self._unitary_index.get((party, setting, outcome, bool(is_dagger)))
 
     def canonical_word(self, word: Iterable[int]) -> tuple[int, ...] | None:
         lexmon = np.asarray(tuple(int(v) for v in word), dtype=np.intc)
         if lexmon.size == 0:
             return _IDENTITY
         canonical = tuple(int(v) for v in np.asarray(nb_lexmon_to_canonical(lexmon, self.notcomm), dtype=int))
-        return self._apply_projector_rules(canonical)
+        return self._apply_operator_rules(canonical)
 
     def _build_entry_consistency(self) -> None:
         for row, row_word in enumerate(self.operator_sequence):
+            row_adj = self._adjoint_word(row_word)
             for col, col_word in enumerate(self.operator_sequence[: row + 1]):
-                label = self.canonical_word(tuple(reversed(row_word)) + col_word)
+                label = self.canonical_word(row_adj + col_word)
                 self.entry_labels[row, col] = label
                 if label is _ZERO_MONOMIAL:
                     self.zero_entries.append((row, col))
@@ -216,81 +296,68 @@ class MomentMatrixTemplate:
                 if rep != (row, col):
                     self.consistency_pairs.append(((row, col), rep))
 
-    def _apply_projector_rules(self, word: tuple[int, ...]) -> tuple[int, ...] | None:
+    def _adjoint_word(self, word: tuple[int, ...]) -> tuple[int, ...]:
+        return tuple(int(self.operators[idx].adjoint_lex_index) for idx in reversed(word))
+
+    def _apply_operator_rules(self, word: tuple[int, ...]) -> tuple[int, ...] | None:
         if not word:
             return _IDENTITY
 
         out: list[int] = []
-        previous: Operator | None = None
         for lex_index in word:
             op = self.operators[int(lex_index)]
-            if previous is not None and self._is_projective_operator(op):
-                if (
-                    previous.party == op.party
-                    and previous.setting == op.setting
-                    and previous.outcome != op.outcome
-                ):
-                    return _ZERO_MONOMIAL
-                if previous == op:
-                    continue
+            if out:
+                prev = self.operators[int(out[-1])]
+                if self._is_projective_operator(prev) and self._is_projective_operator(op):
+                    if prev.party == op.party and prev.setting == op.setting:
+                        if prev.outcome != op.outcome:
+                            return _ZERO_MONOMIAL
+                        out.pop()
+                        out.append(int(prev.lex_index))
+                        continue
+                if prev.kind == "unitary" and op.kind == "unitary":
+                    if (
+                        prev.party == op.party
+                        and prev.setting == op.setting
+                        and prev.outcome == op.outcome
+                        and prev.is_dagger != op.is_dagger
+                    ):
+                        out.pop()
+                        continue
             out.append(int(lex_index))
-            previous = op
-
-        if out:
-            rows = np.asarray([self.operators[i].as_fast_npa_row() for i in out], dtype=np.intc)
-            if self.projective_bob or self.projective_eve:
-                rows = remove_projector_squares(rows)
-            # ``nb_is_physical`` is a positivity classifier, not a validity
-            # test for all moment entries. We still call it here so fast_npa's
-            # representation is exercised without discarding noncommuting
-            # same-party words that belong in an NPA relaxation.
-            _ = nb_is_physical(rows, sandwich_positivity=True)
-            recovered = [
-                self.find_operator("B" if int(row[0]) == 1 else "E", int(row[-2]) - 1, int(row[-1]) - 1)
-                for row in rows
-            ]
-            if any(item is None for item in recovered):
-                return _ZERO_MONOMIAL
-            out = [int(v) for v in recovered]
-        return tuple(int(v) for v in out)
+        return tuple(out)
 
     def _is_projective_operator(self, op: Operator) -> bool:
-        return (op.party == "B" and self.projective_bob) or (op.party == "E" and self.projective_eve)
+        return op.kind == "projector"
 
 
 @dataclass
-class MomentMatrix(MomentMatrixTemplate):
-    """Moment matrix instantiated for one preparation."""
+class MomentMatrix:
+    """One preparation-indexed moment matrix instance."""
 
+    template: MomentMatrixTemplate
     prep_index: int = 0
     sdp_var: int | None = None
 
-    @classmethod
-    def from_template(cls, template: MomentMatrixTemplate, *, prep_index: int) -> "MomentMatrix":
-        matrix = cls(
-            operator_sequence=list(template.operator_sequence),
-            operators=list(template.operators),
-            notcomm=np.asarray(template.notcomm, dtype=bool),
-            projective_bob=template.projective_bob,
-            projective_eve=template.projective_eve,
-            measurement_column_constraints=[],
-            prep_index=int(prep_index),
-        )
-        matrix.entry_labels = template.entry_labels
-        matrix.entry_representatives = template.entry_representatives
-        matrix.zero_entries = template.zero_entries
-        matrix.consistency_pairs = template.consistency_pairs
-        return matrix
+    @property
+    def dimension(self) -> int:
+        return self.template.dimension
 
-    def apply_prep_opeq_constraints(
+    @property
+    def real_dimension(self) -> int:
+        return self.template.real_dimension
+
+    def word_index(self, word: tuple[int, ...]) -> int | None:
+        return self.template.word_index(word)
+
+    def find_operator(
         self,
-        prep_index: int,
-        alpha_coeffs: np.ndarray,
-    ) -> list[LinearMomentConstraint]:
-        """Compatibility hook; preparation OPEQs are assembled globally."""
-
-        _ = prep_index, alpha_coeffs
-        return []
+        party: str,
+        setting: int,
+        outcome: int,
+        is_dagger: bool | None = None,
+    ) -> int | None:
+        return self.template.find_operator(party, setting, outcome, is_dagger=is_dagger)
 
 
 class QKDNoncontextualSDP:
@@ -335,6 +402,7 @@ class QKDNoncontextualSDP:
         self.eve_success_probability: float | None = None
         self.key_rate_lower_bound: float | None = None
         self.solution_matrices: list[np.ndarray] = []
+        self.solution_matrices_real: list[np.ndarray] = []
 
     def _log(self, level: int, message: str) -> None:
         if self.verbose >= int(level):
@@ -356,34 +424,82 @@ class QKDNoncontextualSDP:
             return "Bob"
         raise ValueError("master_key_holder must be 'Alice' or 'Bob'.")
 
-    def build_operator_list(self) -> list[Operator]:
-        """Create Bob and Eve effect operators for all valid scenario outcomes."""
+    def _party_is_projective(self, party: str) -> bool:
+        return (party == "B" and self.projective_bob) or (party == "E" and self.projective_eve)
 
+    def build_operator_list(self) -> list[Operator]:
         operators: list[Operator] = []
         b_counts = self.scenario.b_cardinality_per_y.astype(int, copy=False)
+
         for party in ("B", "E"):
+            is_projective = self._party_is_projective(party)
             for y in range(self.scenario.Y_cardinality):
-                for b in range(int(b_counts[y])):
-                    operators.append(Operator(party=party, setting=y, outcome=b, lex_index=len(operators)))
+                count = int(b_counts[y])
+                if is_projective:
+                    for b in range(max(0, count - 1)):
+                        operators.append(
+                            Operator(
+                                party=party,
+                                setting=y,
+                                outcome=b,
+                                lex_index=len(operators),
+                                kind="projector",
+                                is_dagger=False,
+                                adjoint_lex_index=len(operators),
+                            )
+                        )
+                    continue
+                for b in range(max(0, count - 1)):
+                    idx_u = len(operators)
+                    idx_ud = idx_u + 1
+                    operators.append(
+                        Operator(
+                            party=party,
+                            setting=y,
+                            outcome=b,
+                            lex_index=idx_u,
+                            kind="unitary",
+                            is_dagger=False,
+                            adjoint_lex_index=idx_ud,
+                        )
+                    )
+                    operators.append(
+                        Operator(
+                            party=party,
+                            setting=y,
+                            outcome=b,
+                            lex_index=idx_ud,
+                            kind="unitary",
+                            is_dagger=True,
+                            adjoint_lex_index=idx_u,
+                        )
+                    )
+
         self.operators = operators
         return list(operators)
 
     def build_lexorder_and_notcomm(self) -> tuple[np.ndarray, np.ndarray]:
-        """Build fast_npa lexicographic order and noncommutation table."""
-
         if not self.operators:
             self.build_operator_list()
         self.lexorder = np.asarray([op.as_fast_npa_row() for op in self.operators], dtype=np.intc)
-        sources_to_check = np.full((2, 2, 1), 2, dtype=np.uint8)
-        self.notcomm = np.asarray(
-            commutation_matrix(self.lexorder, sources_to_check, commuting=False),
-            dtype=bool,
-        )
+
+        n_ops = len(self.operators)
+        notcomm = np.zeros((n_ops, n_ops), dtype=bool)
+        for i in range(n_ops):
+            for j in range(n_ops):
+                op_i = self.operators[i]
+                op_j = self.operators[j]
+                if op_i.party != op_j.party:
+                    notcomm[i, j] = False
+                elif op_i.setting == op_j.setting:
+                    notcomm[i, j] = bool(i != j)
+                else:
+                    notcomm[i, j] = True
+
+        self.notcomm = notcomm
         return self.lexorder.copy(), self.notcomm.copy()
 
     def instantiate_moment_matrices(self) -> list[MomentMatrix]:
-        """Build the template and one matrix placeholder per preparation."""
-
         if self.notcomm is None:
             self.build_lexorder_and_notcomm()
         assert self.notcomm is not None
@@ -401,17 +517,17 @@ class QKDNoncontextualSDP:
         ]
         if self.verbose >= 1:
             dim = int(self.template.dimension)
-            packed = dim * (dim + 1) // 2
+            real_dim = int(self.template.real_dimension)
+            packed = real_dim * (real_dim + 1) // 2
             self._log(
                 1,
-                f"[eve_sdp] moment matrices: {len(self.moment_matrices)} blocks, each {dim}x{dim} "
+                f"[eve_sdp] moment matrices: {len(self.moment_matrices)} blocks, "
+                f"complex {dim}x{dim} embedded as real {real_dim}x{real_dim} "
                 f"(symmetric packed={packed})",
             )
         return list(self.moment_matrices)
 
     def apply_observed_data_constraints(self) -> list[LinearMomentConstraint]:
-        """Assemble all affine constraints for the SDP."""
-
         if self.template is None or not self.moment_matrices:
             self.instantiate_moment_matrices()
         assert self.template is not None
@@ -419,9 +535,17 @@ class QKDNoncontextualSDP:
         constraints: list[LinearMomentConstraint] = []
         for matrix in self.moment_matrices:
             x = matrix.prep_index
+            constraints.extend(self._complex_embedding_constraints(x))
             constraints.extend(self.template.apply_operator_constraints(x))
             constraints.extend(self._moment_consistency_constraints(x))
-            constraints.extend(self.template.apply_measurement_opeq_constraints(x, self.scenario.opeq_meas_numeric, party="B"))
+            constraints.extend(
+                self.template.apply_measurement_opeq_constraints(
+                    x,
+                    self.scenario.opeq_meas_numeric,
+                    b_cardinality_per_y=self.scenario.b_cardinality_per_y,
+                    party="B",
+                )
+            )
             constraints.extend(self._measurement_completeness_constraints(x))
             constraints.extend(self._observed_bob_constraints(x))
             constraints.extend(self._bob_eve_marginal_constraints(x))
@@ -438,8 +562,6 @@ class QKDNoncontextualSDP:
         master_key_holder: Literal["Alice", "Bob"] | str | None = None,
         where_key: Sequence[Sequence[int]] | None = None,
     ) -> None:
-        """Set the objective to maximize Eve's average correct key guess."""
-
         if self.template is None:
             self.instantiate_moment_matrices()
         assert self.template is not None
@@ -454,25 +576,20 @@ class QKDNoncontextualSDP:
             raise ValueError("where_key must contain at least one key-eligible (x,y) pair.")
         weight = 1.0 / float(pair_count)
         for y, row in enumerate(self.where_key):
+            b_count = int(self.scenario.b_cardinality_per_y[y])
             for x in row:
                 if self.master_key_holder == "Alice":
                     e = int(key_table[x, y])
-                    if e < 0 or e >= int(self.scenario.b_cardinality_per_y[y]):
+                    if e < 0 or e >= b_count:
                         raise ValueError(f"key_selection[{x},{y}] is not a valid outcome for y={y}.")
-                    op_idx = self.template.find_operator("E", y, e)
-                    col = self.template.word_index((op_idx,)) if op_idx is not None else None
-                    if col is None:
-                        raise RuntimeError("Eve key operator is unavailable in the moment template.")
-                    terms.append((x, 0, col, weight))
+                    prob_terms = self._single_probability_terms(int(x), "E", y, e)
+                    for term in prob_terms:
+                        terms.append((term[0], term[1], term[2], weight * term[3]))
                     continue
 
-                for b in range(int(self.scenario.b_cardinality_per_y[y])):
-                    b_op = self.template.find_operator("B", y, b)
-                    e_op = self.template.find_operator("E", y, b)
-                    col = self.template.word_index((b_op, e_op)) if b_op is not None and e_op is not None else None
-                    if col is None:
-                        raise RuntimeError("Bob-Eve joint operator is unavailable in the moment template.")
-                    terms.append((x, 0, col, weight))
+                for b in range(b_count):
+                    for term in self._joint_probability_terms(int(x), y, b, b):
+                        terms.append((term[0], term[1], term[2], weight * term[3]))
         self.key_selection_table = key_table
         self.objective_pair_count = int(pair_count)
         self.objective_terms = terms
@@ -484,8 +601,6 @@ class QKDNoncontextualSDP:
         master_key_holder: Literal["Alice", "Bob"] | str | None = None,
         where_key: Sequence[Sequence[int]] | None = None,
     ) -> float:
-        """Build and solve the SDP, returning Eve's success-probability bound."""
-
         if not self.constraints:
             self.apply_observed_data_constraints()
         if key_selection_function is not None or master_key_holder is not None or where_key is not None or not self.objective_terms:
@@ -509,7 +624,10 @@ class QKDNoncontextualSDP:
                 termination_code = task.optimize()
                 objective = self._get_optimal_primal_objective(task, termination_code)
                 self.eve_success_probability = float(objective)
-                self.solution_matrices = self._extract_solution_matrices(task)
+                self.solution_matrices_real = self._extract_solution_matrices_real(task)
+                self.solution_matrices = [
+                    self._real_block_to_complex(matrix) for matrix in self.solution_matrices_real
+                ]
         self.key_rate_lower_bound = self.compute_key_rate(rate_type="reverse_fano")
         return float(self.eve_success_probability)
 
@@ -520,8 +638,6 @@ class QKDNoncontextualSDP:
         master_key_holder: Literal["Alice", "Bob"] | str | None = None,
         where_key: Sequence[Sequence[int]] | None = None,
     ) -> float:
-        """Alias for :meth:`solve_sdp` matching the public API example."""
-
         return self.solve_sdp(
             key_selection_function=key_selection_function,
             master_key_holder=master_key_holder,
@@ -534,8 +650,6 @@ class QKDNoncontextualSDP:
         rate_type: Literal["reverse_fano", "min_entropy"] = "reverse_fano",
         other_party_uncertainty: float | None = None,
     ) -> float:
-        """Compute the key-rate lower bound from the solved Eve bound."""
-
         if self.eve_success_probability is None:
             raise RuntimeError("solve_sdp must be called before compute_key_rate.")
 
@@ -606,121 +720,153 @@ class QKDNoncontextualSDP:
             )
         return out
 
-    def _measurement_completeness_constraints(self, prep_index: int) -> list[LinearMomentConstraint]:
+    def _complex_embedding_constraints(self, prep_index: int) -> list[LinearMomentConstraint]:
         assert self.template is not None
+        d = int(self.template.dimension)
         constraints: list[LinearMomentConstraint] = []
-        for party in ("B", "E"):
-            for y in range(self.scenario.Y_cardinality):
-                terms = []
-                for b in range(int(self.scenario.b_cardinality_per_y[y])):
-                    op_idx = self.template.find_operator(party, y, b)
-                    col = self.template.word_index((op_idx,)) if op_idx is not None else None
-                    if col is not None:
-                        terms.append((prep_index, 0, col, 1.0))
+        for i in range(d):
+            for j in range(d):
                 constraints.append(
                     LinearMomentConstraint(
-                        terms=terms,
-                        rhs=1.0,
-                        name=f"complete_{party}_x{prep_index}_y{y}",
+                        terms=[
+                            (prep_index, i, j, 1.0),
+                            (prep_index, d + i, d + j, -1.0),
+                        ],
+                        rhs=0.0,
+                        name=f"embed_diagblock_x{prep_index}_r{i}_c{j}",
+                        domain="zero_real",
+                    )
+                )
+                constraints.append(
+                    LinearMomentConstraint(
+                        terms=[
+                            (prep_index, i, d + j, 1.0),
+                            (prep_index, d + i, j, 1.0),
+                        ],
+                        rhs=0.0,
+                        name=f"embed_offblock_x{prep_index}_r{i}_c{j}",
+                        domain="zero_real",
                     )
                 )
         return constraints
+
+    def _measurement_completeness_constraints(self, prep_index: int) -> list[LinearMomentConstraint]:
+        # The final outcome is reconstructed from completeness in both pathways,
+        # so no separate completeness constraints are added here.
+        return []
 
     def _observed_bob_constraints(self, prep_index: int) -> list[LinearMomentConstraint]:
         assert self.template is not None
         constraints: list[LinearMomentConstraint] = []
         data = self.scenario.data_numeric
         for y in range(self.scenario.Y_cardinality):
-            for b in range(int(self.scenario.b_cardinality_per_y[y])):
-                op_idx = self.template.find_operator("B", y, b)
-                col = self.template.word_index((op_idx,)) if op_idx is not None else None
-                if col is None:
-                    continue
+            b_count = int(self.scenario.b_cardinality_per_y[y])
+            if self.projective_bob:
+                for b in range(b_count):
+                    terms = self._single_probability_terms(prep_index, "B", y, b)
+                    constraints.append(
+                        LinearMomentConstraint(
+                            terms=terms,
+                            rhs=float(data[prep_index, y, b]),
+                            name=f"data_proj_x{prep_index}_y{y}_b{b}",
+                            domain="zero_complex",
+                        )
+                    )
+                continue
+
+            for b in range(b_count):
+                terms = self._single_probability_terms(prep_index, "B", y, b)
                 constraints.append(
                     LinearMomentConstraint(
-                        terms=[(prep_index, 0, col, 1.0)],
+                        terms=terms,
                         rhs=float(data[prep_index, y, b]),
-                        name=f"data_x{prep_index}_y{y}_b{b}",
+                        name=f"data_naimark_x{prep_index}_y{y}_b{b}",
+                        domain="zero_complex",
                     )
                 )
         return constraints
 
     def _bob_eve_marginal_constraints(self, prep_index: int) -> list[LinearMomentConstraint]:
-        assert self.template is not None
         constraints: list[LinearMomentConstraint] = []
         for y in range(self.scenario.Y_cardinality):
             b_count = int(self.scenario.b_cardinality_per_y[y])
             for b in range(b_count):
-                b_op = self.template.find_operator("B", y, b)
-                b_col = self.template.word_index((b_op,)) if b_op is not None else None
-                if b_col is None:
-                    continue
-                terms = [(prep_index, 0, b_col, -1.0)]
+                terms = [
+                    (prep_index, row, col, -coeff)
+                    for (_, row, col, coeff) in self._single_probability_terms(prep_index, "B", y, b)
+                ]
                 for e in range(b_count):
-                    e_op = self.template.find_operator("E", y, e)
-                    joint_col = self.template.word_index((b_op, e_op)) if e_op is not None else None
-                    if joint_col is not None:
-                        terms.append((prep_index, 0, joint_col, 1.0))
+                    terms.extend(self._joint_probability_terms(prep_index, y, b, e))
                 constraints.append(
-                    LinearMomentConstraint(terms=terms, rhs=0.0, name=f"joint_to_bob_x{prep_index}_y{y}_b{b}")
+                    LinearMomentConstraint(
+                        terms=terms,
+                        rhs=0.0,
+                        name=f"joint_to_bob_x{prep_index}_y{y}_b{b}",
+                    )
                 )
 
             for e in range(b_count):
-                e_op = self.template.find_operator("E", y, e)
-                e_col = self.template.word_index((e_op,)) if e_op is not None else None
-                if e_col is None:
-                    continue
-                terms = [(prep_index, 0, e_col, -1.0)]
+                terms = [
+                    (prep_index, row, col, -coeff)
+                    for (_, row, col, coeff) in self._single_probability_terms(prep_index, "E", y, e)
+                ]
                 for b in range(b_count):
-                    b_op = self.template.find_operator("B", y, b)
-                    joint_col = self.template.word_index((b_op, e_op)) if b_op is not None else None
-                    if joint_col is not None:
-                        terms.append((prep_index, 0, joint_col, 1.0))
+                    terms.extend(self._joint_probability_terms(prep_index, y, b, e))
                 constraints.append(
-                    LinearMomentConstraint(terms=terms, rhs=0.0, name=f"joint_to_eve_x{prep_index}_y{y}_e{e}")
+                    LinearMomentConstraint(
+                        terms=terms,
+                        rhs=0.0,
+                        name=f"joint_to_eve_x{prep_index}_y{y}_e{e}",
+                    )
                 )
         return constraints
 
     def _probability_positivity_constraints(self, prep_index: int) -> list[LinearMomentConstraint]:
-        assert self.template is not None
         constraints: list[LinearMomentConstraint] = []
 
-        def add_probability_bounds(col: int, name: str) -> None:
+        def add_probability_bounds(terms: list[tuple[int, int, int, float]], name: str) -> None:
+            complex_terms = [(prep, row, col, complex(coeff)) for prep, row, col, coeff in terms]
             constraints.append(
                 LinearMomentConstraint(
-                    terms=[(prep_index, 0, col, 1.0)],
+                    terms=complex_terms,
                     rhs=0.0,
-                    name=f"{name}_lower",
-                    domain="plus",
+                    name=f"{name}_imag_zero",
+                    domain="zero_imag",
                 )
             )
             constraints.append(
                 LinearMomentConstraint(
-                    terms=[(prep_index, 0, col, -1.0)],
+                    terms=complex_terms,
+                    rhs=0.0,
+                    name=f"{name}_lower",
+                    domain="plus_real",
+                )
+            )
+            constraints.append(
+                LinearMomentConstraint(
+                    terms=[(prep_index, row, col, -complex(coeff)) for _, row, col, coeff in terms],
                     rhs=-1.0,
                     name=f"{name}_upper",
-                    domain="plus",
+                    domain="plus_real",
                 )
             )
 
         for party in ("B", "E"):
             for y in range(self.scenario.Y_cardinality):
                 for b in range(int(self.scenario.b_cardinality_per_y[y])):
-                    op_idx = self.template.find_operator(party, y, b)
-                    col = self.template.word_index((op_idx,)) if op_idx is not None else None
-                    if col is not None:
-                        add_probability_bounds(col, f"prob_{party}_x{prep_index}_y{y}_b{b}")
+                    add_probability_bounds(
+                        self._single_probability_terms(prep_index, party, y, b),
+                        f"prob_{party}_x{prep_index}_y{y}_b{b}",
+                    )
 
         for y in range(self.scenario.Y_cardinality):
             count = int(self.scenario.b_cardinality_per_y[y])
             for b in range(count):
-                b_op = self.template.find_operator("B", y, b)
                 for e in range(count):
-                    e_op = self.template.find_operator("E", y, e)
-                    col = self.template.word_index((b_op, e_op)) if b_op is not None and e_op is not None else None
-                    if col is not None:
-                        add_probability_bounds(col, f"joint_x{prep_index}_y{y}_b{b}_e{e}")
-
+                    add_probability_bounds(
+                        self._joint_probability_terms(prep_index, y, b, e),
+                        f"joint_x{prep_index}_y{y}_b{b}_e{e}",
+                    )
         return constraints
 
     def _preparation_opeq_constraints(self) -> list[LinearMomentConstraint]:
@@ -744,6 +890,72 @@ class QKDNoncontextualSDP:
                         )
                     )
         return constraints
+
+    def _effect_affine_words(self, party: str, y: int, b: int) -> list[tuple[tuple[int, ...], float]]:
+        assert self.template is not None
+        b_count = int(self.scenario.b_cardinality_per_y[y])
+        if self._party_is_projective(party):
+            if b_count <= 1:
+                return [(_IDENTITY, 1.0)]
+            if b < b_count - 1:
+                op_idx = self.template.find_operator(party, y, b)
+                if op_idx is None:
+                    raise RuntimeError(f"Missing projector for {party}, y={y}, b={b}.")
+                return [((int(op_idx),), 1.0)]
+            terms: list[tuple[tuple[int, ...], float]] = [(_IDENTITY, 1.0)]
+            for k in range(b_count - 1):
+                op_idx = self.template.find_operator(party, y, k)
+                if op_idx is None:
+                    raise RuntimeError(f"Missing projector for {party}, y={y}, b={k}.")
+                terms.append(((int(op_idx),), -1.0))
+            return terms
+
+        if b_count <= 1:
+            return [(_IDENTITY, 1.0)]
+
+        terms: list[tuple[tuple[int, ...], float]] = []
+        if b < b_count - 1:
+            u = self.template.find_operator(party, y, b, is_dagger=False)
+            ud = self.template.find_operator(party, y, b, is_dagger=True)
+            if u is None or ud is None:
+                raise RuntimeError(f"Missing unitary pair for {party}, y={y}, b={b}.")
+            terms.append((_IDENTITY, 0.5))
+            terms.append(((int(u),), 0.25))
+            terms.append(((int(ud),), 0.25))
+            return terms
+
+        terms.append((_IDENTITY, 0.5 * (3.0 - float(b_count))))
+        for k in range(b_count - 1):
+            u = self.template.find_operator(party, y, k, is_dagger=False)
+            ud = self.template.find_operator(party, y, k, is_dagger=True)
+            if u is None or ud is None:
+                raise RuntimeError(f"Missing unitary pair for {party}, y={y}, b={k}.")
+            terms.append(((int(u),), -0.25))
+            terms.append(((int(ud),), -0.25))
+        return terms
+
+    def _single_probability_terms(self, prep_index: int, party: str, y: int, b: int) -> list[tuple[int, int, int, float]]:
+        assert self.template is not None
+        out: list[tuple[int, int, int, float]] = []
+        for word, coeff in self._effect_affine_words(party, y, b):
+            col = self.template.word_index(word)
+            if col is None:
+                continue
+            out.append((prep_index, 0, int(col), float(coeff)))
+        return out
+
+    def _joint_probability_terms(self, prep_index: int, y: int, b: int, e: int) -> list[tuple[int, int, int, float]]:
+        assert self.template is not None
+        out: list[tuple[int, int, int, float]] = []
+        b_terms = self._effect_affine_words("B", y, b)
+        e_terms = self._effect_affine_words("E", y, e)
+        for b_word, b_coeff in b_terms:
+            for e_word, e_coeff in e_terms:
+                col = self.template.word_index(b_word + e_word)
+                if col is None:
+                    continue
+                out.append((prep_index, 0, int(col), float(b_coeff * e_coeff)))
+        return out
 
     def _normalize_key_selection(
         self,
@@ -830,15 +1042,20 @@ class QKDNoncontextualSDP:
 
     def _build_mosek_task(self, task: mosek.Task) -> None:
         assert self.template is not None
-        dim = self.template.dimension
+        dim = self.template.real_dimension
+
+        expanded_rows: list[tuple[str, float, list[tuple[int, int, int, float]]]] = []
+        for constraint in self.constraints:
+            expanded_rows.extend(self._expand_constraint_rows(constraint))
+
         task.appendbarvars([dim] * self.scenario.X_cardinality)
-        task.appendafes(len(self.constraints))
+        task.appendafes(len(expanded_rows))
 
         bar_coeffs: dict[tuple[int, int, int, int], float] = {}
-        g = np.empty((len(self.constraints),), dtype=float)
-        for row_index, constraint in enumerate(self.constraints):
-            g[row_index] = -float(constraint.rhs)
-            for prep, row, col, coeff in constraint.terms:
+        g = np.empty((len(expanded_rows),), dtype=float)
+        for row_index, (domain, rhs, terms) in enumerate(expanded_rows):
+            g[row_index] = -float(rhs)
+            for prep, row, col, coeff in terms:
                 k, l, value = self._bar_triplet_entry(row, col, coeff)
                 key = (row_index, int(prep), k, l)
                 bar_coeffs[key] = bar_coeffs.get(key, 0.0) + value
@@ -863,19 +1080,20 @@ class QKDNoncontextualSDP:
             task.putafegslice(0, int(g.size), g.tolist())
             zero_domain = task.appendrzerodomain(1)
             plus_domain = task.appendrplusdomain(1)
-            for row_index, constraint in enumerate(self.constraints):
-                if constraint.domain == "zero":
+            for row_index, (domain, _, _) in enumerate(expanded_rows):
+                if domain == "zero":
                     task.appendaccseq(zero_domain, row_index, None)
-                elif constraint.domain == "plus":
+                elif domain == "plus":
                     task.appendaccseq(plus_domain, row_index, None)
                 else:
-                    raise ValueError(f"Unknown affine constraint domain: {constraint.domain}")
+                    raise ValueError(f"Unknown affine constraint domain: {domain}")
 
         obj_coeffs: dict[tuple[int, int, int], float] = {}
         for prep, row, col, coeff in self.objective_terms:
-            k, l, value = self._bar_triplet_entry(row, col, coeff)
-            key = (int(prep), k, l)
-            obj_coeffs[key] = obj_coeffs.get(key, 0.0) + value
+            for emb_prep, emb_row, emb_col, emb_coeff in self._expand_complex_term_real_part(prep, row, col, complex(coeff)):
+                k, l, value = self._bar_triplet_entry(emb_row, emb_col, emb_coeff)
+                key = (int(emb_prep), k, l)
+                obj_coeffs[key] = obj_coeffs.get(key, 0.0) + value
         if obj_coeffs:
             obj_j: list[int] = []
             obj_k: list[int] = []
@@ -903,9 +1121,79 @@ class QKDNoncontextualSDP:
             value *= 0.5
         return k, l, value
 
-    def _extract_solution_matrices(self, task: mosek.Task) -> list[np.ndarray]:
+    def _expand_complex_term_real_part(
+        self,
+        prep: int,
+        row: int,
+        col: int,
+        coeff: complex,
+    ) -> list[tuple[int, int, int, float]]:
         assert self.template is not None
-        dim = self.template.dimension
+        d = int(self.template.dimension)
+        a = float(np.real(coeff))
+        b = float(np.imag(coeff))
+        out: list[tuple[int, int, int, float]] = []
+        if abs(a) > self.atol:
+            out.append((int(prep), int(row), int(col), a))
+        if abs(b) > self.atol:
+            out.append((int(prep), d + int(row), int(col), -b))
+        return out
+
+    def _expand_complex_term_imag_part(
+        self,
+        prep: int,
+        row: int,
+        col: int,
+        coeff: complex,
+    ) -> list[tuple[int, int, int, float]]:
+        assert self.template is not None
+        d = int(self.template.dimension)
+        a = float(np.real(coeff))
+        b = float(np.imag(coeff))
+        out: list[tuple[int, int, int, float]] = []
+        if abs(a) > self.atol:
+            out.append((int(prep), d + int(row), int(col), a))
+        if abs(b) > self.atol:
+            out.append((int(prep), int(row), int(col), b))
+        return out
+
+    def _expand_constraint_rows(
+        self,
+        constraint: LinearMomentConstraint,
+    ) -> list[tuple[str, float, list[tuple[int, int, int, float]]]]:
+        rows: list[tuple[str, float, list[tuple[int, int, int, float]]]] = []
+        if constraint.domain == "zero_complex":
+            real_terms: list[tuple[int, int, int, float]] = []
+            imag_terms: list[tuple[int, int, int, float]] = []
+            for prep, row, col, coeff in constraint.terms:
+                real_terms.extend(self._expand_complex_term_real_part(prep, row, col, complex(coeff)))
+                imag_terms.extend(self._expand_complex_term_imag_part(prep, row, col, complex(coeff)))
+            rows.append(("zero", float(np.real(constraint.rhs)), real_terms))
+            rows.append(("zero", float(np.imag(constraint.rhs)), imag_terms))
+            return rows
+        if constraint.domain == "zero_real":
+            real_terms: list[tuple[int, int, int, float]] = []
+            for prep, row, col, coeff in constraint.terms:
+                real_terms.extend(self._expand_complex_term_real_part(prep, row, col, complex(coeff)))
+            rows.append(("zero", float(np.real(constraint.rhs)), real_terms))
+            return rows
+        if constraint.domain == "zero_imag":
+            imag_terms: list[tuple[int, int, int, float]] = []
+            for prep, row, col, coeff in constraint.terms:
+                imag_terms.extend(self._expand_complex_term_imag_part(prep, row, col, complex(coeff)))
+            rows.append(("zero", float(np.imag(constraint.rhs)), imag_terms))
+            return rows
+        if constraint.domain == "plus_real":
+            real_terms: list[tuple[int, int, int, float]] = []
+            for prep, row, col, coeff in constraint.terms:
+                real_terms.extend(self._expand_complex_term_real_part(prep, row, col, complex(coeff)))
+            rows.append(("plus", float(np.real(constraint.rhs)), real_terms))
+            return rows
+        raise ValueError(f"Unknown constraint domain: {constraint.domain}")
+
+    def _extract_solution_matrices_real(self, task: mosek.Task) -> list[np.ndarray]:
+        assert self.template is not None
+        dim = self.template.real_dimension
         packed_size = dim * (dim + 1) // 2
         matrices: list[np.ndarray] = []
         for x in range(self.scenario.X_cardinality):
@@ -920,6 +1208,25 @@ class QKDNoncontextualSDP:
                     index += 1
             matrices.append(matrix)
         return matrices
+
+    @staticmethod
+    def _complex_to_real_block(matrix: np.ndarray) -> np.ndarray:
+        arr = np.asarray(matrix, dtype=complex)
+        if arr.ndim != 2 or arr.shape[0] != arr.shape[1]:
+            raise ValueError("matrix must be square.")
+        real = np.real(arr)
+        imag = np.imag(arr)
+        return np.block([[real, -imag], [imag, real]])
+
+    @staticmethod
+    def _real_block_to_complex(matrix: np.ndarray) -> np.ndarray:
+        arr = np.asarray(matrix, dtype=float)
+        if arr.ndim != 2 or arr.shape[0] != arr.shape[1] or arr.shape[0] % 2 != 0:
+            raise ValueError("embedded real matrix must be square with even dimension.")
+        d = arr.shape[0] // 2
+        real = np.asarray(arr[:d, :d], dtype=float)
+        imag = np.asarray(arr[d:, :d], dtype=float)
+        return np.asarray(real + 1j * imag, dtype=complex)
 
     @staticmethod
     def _get_optimal_primal_objective(task: mosek.Task, termination_code: object | None = None) -> float:
@@ -937,15 +1244,6 @@ class QKDNoncontextualSDP:
         trm = f" termination={termination_code}." if termination_code is not None else ""
         raise RuntimeError(f"SDP solve failed: MOSEK did not return an optimal solution.{trm} {' | '.join(statuses)}")
 
-    def _bob_key_success_probability(self, key_table: np.ndarray) -> float:
-        total = 0.0
-        count = 0
-        data = self.scenario.data_numeric
-        for x in range(self.scenario.X_cardinality):
-            for y in range(self.scenario.Y_cardinality):
-                total += float(data[x, y, int(key_table[x, y])])
-                count += 1
-        return float(total / float(count))
 
     @staticmethod
     def _binary_entropy(probability: float, atol: float = 1e-12) -> float:
