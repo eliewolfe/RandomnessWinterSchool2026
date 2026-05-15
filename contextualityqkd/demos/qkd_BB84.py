@@ -84,7 +84,7 @@ def main() -> None:
     protocol = ContextualityProtocol(
         scenario=scenario,
         where_key=None,
-        master_key_holder="Bob",
+        master_key_holder="Alice",
         atol=1e-9,
         sdp_projective_bob=False,
         sdp_projective_eve=False,

@@ -58,14 +58,6 @@ protocol = ContextualityProtocol(
     where_key=None,  # where_key=None → all x for every y
     master_key_holder="Bob",
     atol=1e-9,
-    optimize_verbose=None,
-    optimize_cluster_tolerance=1e-6,
-    optimize_cluster_by="threshold_uncertainty",
-    optimize_tie_break="earliest_optimal_stage",
-    sdp_projective_bob=False,
-    sdp_projective_eve=False,
-    sdp_npa_level_bob=1,
-    sdp_npa_level_eve=1,
     sdp_threads=None,
     sdp_verbose=0,
 )

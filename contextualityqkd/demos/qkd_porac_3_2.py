@@ -118,17 +118,20 @@ def build_porac_scenario(*, eta: float = 1.0) -> QuantumContextualityScenario:
 def main() -> None:
     np.set_printoptions(precision=6, suppress=True)
     scenario = build_porac_scenario(eta=1.0)
+    # Important caveat for comparing against the article:
+    # - We explicitly assume Bob's measurements are projective below.
+    # - This is the usual extra assumption in many SDP analyses, but it is not
+    #   justified in a fully device-independent operational model.
+    # - We adopt it here to force the code path that reports a positive PORAC
+    #   key-rate region consistent with the article's projection-based
+    #   relaxation (Q^Pi_{1+BE}).
     protocol = ContextualityProtocol(
         scenario=scenario,
         where_key=None,
         master_key_holder="Alice",
         atol=1e-9,
-        optimize_verbose=None,
-        optimize_cluster_tolerance=1e-6,
-        optimize_cluster_by="threshold_uncertainty",
-        optimize_tie_break="earliest_optimal_stage",
         sdp_projective_bob=True,
-        sdp_projective_eve=True,
+        sdp_projective_eve=False,
         sdp_npa_level_bob=1,
         sdp_npa_level_eve=1,
         sdp_threads=1,
@@ -139,12 +142,9 @@ def main() -> None:
     #     where_key=None,
     #     master_key_holder="Bob",
     #     atol=1e-9,
-    #     optimize_verbose=None,
     #     optimize_cluster_tolerance=1e-6,
     #     optimize_cluster_by="threshold_uncertainty",
     #     optimize_tie_break="earliest_optimal_stage",
-    #     sdp_projective_bob=True,
-    #     sdp_projective_eve=True,
     #     sdp_npa_level_bob=1,
     #     sdp_npa_level_eve=1,
     #     sdp_threads=1,
@@ -187,12 +187,9 @@ def main() -> None:
     #     where_key="Automatic",
     #     master_key_holder="Alice",
     #     atol=1e-9,
-    #     optimize_verbose=True,
     #     optimize_cluster_tolerance=1e-6,
     #     optimize_cluster_by="threshold_uncertainty",
     #     optimize_tie_break="earliest_optimal_stage",
-    #     sdp_projective_bob=False,
-    #     sdp_projective_eve=False,
     #     sdp_npa_level_bob=1,
     #     sdp_npa_level_eve=1,
     #     sdp_threads=None,
