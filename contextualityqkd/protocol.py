@@ -49,6 +49,7 @@ class ContextualityProtocol:
         sdp_projective_eve: bool = False,
         sdp_npa_level_bob: int = 1,
         sdp_npa_level_eve: int = 1,
+        sdp_use_u_only: bool = True,
         sdp_threads: int | None = None,
         sdp_verbose: int | bool = 0,
     ) -> None:
@@ -64,6 +65,7 @@ class ContextualityProtocol:
         self.sdp_projective_eve = bool(sdp_projective_eve)
         self.sdp_npa_level_bob = int(sdp_npa_level_bob)
         self.sdp_npa_level_eve = int(sdp_npa_level_eve)
+        self.sdp_use_u_only = bool(sdp_use_u_only)
         self.sdp_threads = None if sdp_threads is None else int(sdp_threads)
         self.sdp_verbose = int(sdp_verbose)
 
@@ -864,13 +866,36 @@ class ContextualityProtocol:
             projective_eve=self.sdp_projective_eve,
             npa_level_bob=self.sdp_npa_level_bob,
             npa_level_eve=self.sdp_npa_level_eve,
+            use_u_only=self.sdp_use_u_only,
             master_key_holder=self.master_key_holder,
             where_key=self.where_key,
             threads=self.sdp_threads,
             atol=self.atol,
             verbose=self.sdp_verbose,
         )
-        solver.solve_sdp()
+        try:
+            solver.solve_sdp()
+        except (AssertionError, RuntimeError):
+            if not self.sdp_use_u_only:
+                raise
+            # U-only is the default fast path, but some scenarios can become
+            # infeasible under that relaxation; retry once with full generators.
+            if self.sdp_verbose:
+                print("[protocol] U-only SDP failed; retrying with full U/U-dagger generator set.")
+            solver = QKDNoncontextualSDP(
+                self.scenario,
+                projective_bob=self.sdp_projective_bob,
+                projective_eve=self.sdp_projective_eve,
+                npa_level_bob=self.sdp_npa_level_bob,
+                npa_level_eve=self.sdp_npa_level_eve,
+                use_u_only=False,
+                master_key_holder=self.master_key_holder,
+                where_key=self.where_key,
+                threads=self.sdp_threads,
+                atol=self.atol,
+                verbose=self.sdp_verbose,
+            )
+            solver.solve_sdp()
         return solver
 
     def _lp_guess_vector_for_holder(self, holder: Literal["Alice", "Bob"]) -> np.ndarray:
