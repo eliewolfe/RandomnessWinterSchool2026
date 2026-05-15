@@ -19,11 +19,11 @@ from contextualityqkd.quantum import (
 )
 from contextualityqkd.scenario import ContextualityScenario
 
-RUN_SDP = False
 
-
-NUM_MEAS = 8
-NUM_STATES = 16
+# NUM_MEAS = 8
+# NUM_STATES = 16
+NUM_MEAS = 4
+NUM_STATES = 8
 # GOOD_GUESS_THRESHOLD = 2.0 / 3.0
 
 def _validate_configuration(num_states: int, num_meas: int) -> None:
@@ -90,8 +90,7 @@ def main() -> None:
 
     np.set_printoptions(precision=6, suppress=True)
     ContextualityScenario.print_title(
-        f"QKD Protocol: {num_states}-state XZ ring, {num_meas} measurements, "
-        "automatic where_key optimization"
+        f"QKD Protocol: {num_states}-state XZ ring, {num_meas} measurements"
     )
 
     # Evenly spaced 2-outcome measurements from antipodal state/effect pairs.
@@ -131,20 +130,48 @@ def main() -> None:
     # )
 
     protocol = ContextualityProtocol(
-        scenario,
-        where_key="Automatic",
-        optimize_verbose=True,
+        scenario=scenario,
+        where_key=None,
+        master_key_holder="Alice",
+        atol=1e-9,
+        optimize_verbose=None,
+        optimize_cluster_tolerance=1e-6,
+        optimize_cluster_by="threshold_uncertainty",
+        optimize_tie_break="earliest_optimal_stage",
+        sdp_projective_bob=False,
+        sdp_projective_eve=False,
+        sdp_npa_level_bob=1,
+        sdp_npa_level_eve=1,
+        sdp_threads=None,
+        sdp_verbose=2,
     )
-    protocol.print_where_key_optimization_best_stage(leading_newline=True)
+    # auto_protocol = ContextualityProtocol(
+    #     scenario=scenario,
+    #     where_key="Automatic",
+    #     master_key_holder="Alice",
+    #     atol=1e-9,
+    #     optimize_verbose=True,
+    #     optimize_cluster_tolerance=1e-6,
+    #     optimize_cluster_by="threshold_uncertainty",
+    #     optimize_tie_break="earliest_optimal_stage",
+    #     sdp_projective_bob=False,
+    #     sdp_projective_eve=False,
+    #     sdp_npa_level_bob=1,
+    #     sdp_npa_level_eve=1,
+    #     sdp_threads=None,
+    #     sdp_verbose=0,
+    # )
+    # auto_protocol.print_where_key_optimization_best_stage(leading_newline=True)
     # protocol.print_alice_guessing_metrics()
     # protocol.print_alice_uncertainty_metrics()
-    protocol.print_eve_guessing_metrics(method="lp")
-    protocol.print_eve_uncertainty_metrics(method="lp")
-    protocol.print_key_rate_summary(method="lp")
-    if RUN_SDP:
-        protocol.print_eve_guessing_metrics(method="sdp")
-        protocol.print_eve_uncertainty_metrics(method="sdp")
-        protocol.print_key_rate_summary(method="sdp")
+    protocol.print_eve_security_metrics(
+        method="both",
+        rate_type="reverse_fano",
+        include_per_y_lp=False,
+        precision_vector=3,
+        precision_scalar=6,
+        leading_newline=True,
+    )
 
     try:
         scenario.print_contextuality_measures(precision=3)

@@ -19,8 +19,6 @@ from contextualityqkd.quantum import (
 )
 from contextualityqkd.scenario import ContextualityScenario
 
-RUN_SDP = True
-
 
 def main() -> None:
     np.set_printoptions(precision=6, suppress=True)
@@ -32,24 +30,46 @@ def main() -> None:
         measurement_indices=measurement_indices,
         verbose=False,
     )
-    protocol = ContextualityProtocol(scenario, where_key=measurement_indices)
+    protocol = ContextualityProtocol(
+        scenario=scenario,
+        where_key=measurement_indices,
+        master_key_holder="Alice",
+        atol=1e-9,
+        sdp_projective_bob=False,
+        sdp_projective_eve=False,
+        sdp_npa_level_bob=1,
+        sdp_npa_level_eve=1,
+        sdp_threads=None,
+        sdp_verbose=0,
+    )
 
     scenario.print_probabilities(as_p_b_given_x_y=True, precision=3, representation="symbolic")
     scenario.print_operational_equivalences(precision=3, representation="symbolic")
     protocol.print_alice_guessing_metrics()
     protocol.print_alice_uncertainty_metrics()
-    protocol.print_eve_guessing_metrics(method="lp")
-    protocol.print_eve_uncertainty_metrics(method="lp")
-    protocol.print_key_rate_summary(method="lp")
-    if RUN_SDP:
-        protocol.print_eve_guessing_metrics(method="sdp")
-        protocol.print_eve_uncertainty_metrics(method="sdp")
-        protocol.print_key_rate_summary(method="sdp")
+    protocol.print_eve_security_metrics(
+        method="both",
+        rate_type="reverse_fano",
+        include_per_y_lp=False,
+        precision_vector=3,
+        precision_scalar=6,
+        leading_newline=True,
+    )
 
     # auto_protocol = ContextualityProtocol(
-    #     scenario,
+    #     scenario=scenario,
     #     where_key="Automatic",
-    #     optimize_verbose=True,
+    #     master_key_holder="Alice",
+    #     atol=1e-9,
+    #     optimize_cluster_tolerance=1e-6,
+    #     optimize_cluster_by="threshold_uncertainty",
+    #     optimize_tie_break="earliest_optimal_stage",
+    #     sdp_projective_bob=False,
+    #     sdp_projective_eve=False,
+    #     sdp_npa_level_bob=1,
+    #     sdp_npa_level_eve=1,
+    #     sdp_threads=None,
+    #     sdp_verbose=0,
     # )
     # auto_protocol.print_where_key_optimization_best_stage(leading_newline=True)
 

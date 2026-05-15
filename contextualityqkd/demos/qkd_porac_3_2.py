@@ -18,8 +18,6 @@ from contextualityqkd.protocol import ContextualityProtocol
 from contextualityqkd.quantum import QuantumContextualityScenario
 from contextualityqkd.scenario import ContextualityScenario
 
-RUN_SDP = True
-
 
 def _porac_index(x0: int, x1: int, x2: int) -> int:
     """Encode bit triple (x0,x1,x2) as integer x in {0,...,7}."""
@@ -121,19 +119,34 @@ def main() -> None:
     np.set_printoptions(precision=6, suppress=True)
     scenario = build_porac_scenario(eta=1.0)
     protocol = ContextualityProtocol(
-        scenario,
+        scenario=scenario,
         where_key=None,
+        master_key_holder="Alice",
+        atol=1e-9,
+        optimize_verbose=None,
+        optimize_cluster_tolerance=1e-6,
+        optimize_cluster_by="threshold_uncertainty",
+        optimize_tie_break="earliest_optimal_stage",
         sdp_projective_bob=True,
         sdp_projective_eve=True,
+        sdp_npa_level_bob=1,
+        sdp_npa_level_eve=1,
         sdp_threads=1,
         sdp_verbose=2,
     )
     # bob_protocol = ContextualityProtocol(
-    #     scenario,
+    #     scenario=scenario,
     #     where_key=None,
     #     master_key_holder="Bob",
+    #     atol=1e-9,
+    #     optimize_verbose=None,
+    #     optimize_cluster_tolerance=1e-6,
+    #     optimize_cluster_by="threshold_uncertainty",
+    #     optimize_tie_break="earliest_optimal_stage",
     #     sdp_projective_bob=True,
     #     sdp_projective_eve=True,
+    #     sdp_npa_level_bob=1,
+    #     sdp_npa_level_eve=1,
     #     sdp_threads=1,
     #     sdp_verbose=2,
     # )
@@ -152,24 +165,38 @@ def main() -> None:
     )
     protocol.print_alice_guessing_metrics()
     protocol.print_alice_uncertainty_metrics()
-    # bob_protocol.print_eve_guessing_metrics(method="lp")
-    # bob_protocol.print_eve_uncertainty_metrics(method="lp")
-    # bob_protocol.print_key_rate_summary(method="lp")
-    protocol.print_eve_guessing_metrics(method="lp")
-    protocol.print_eve_uncertainty_metrics(method="lp")
-    protocol.print_key_rate_summary(method="lp")
-    if RUN_SDP:
-        # bob_protocol.print_eve_guessing_metrics(method="sdp")
-        # bob_protocol.print_eve_uncertainty_metrics(method="sdp")
-        # bob_protocol.print_key_rate_summary(method="sdp")
-        protocol.print_eve_guessing_metrics(method="sdp")
-        protocol.print_eve_uncertainty_metrics(method="sdp")
-        protocol.print_key_rate_summary(method="sdp")
+    # bob_protocol.print_eve_security_metrics(
+    #     method="both",
+    #     rate_type="reverse_fano",
+    #     include_per_y_lp=False,
+    #     precision_vector=3,
+    #     precision_scalar=6,
+    #     leading_newline=True,
+    # )
+    protocol.print_eve_security_metrics(
+        method="both",
+        rate_type="reverse_fano",
+        include_per_y_lp=False,
+        precision_vector=3,
+        precision_scalar=6,
+        leading_newline=True,
+    )
 
     # auto_protocol = ContextualityProtocol(
-    #     scenario,
+    #     scenario=scenario,
     #     where_key="Automatic",
+    #     master_key_holder="Alice",
+    #     atol=1e-9,
     #     optimize_verbose=True,
+    #     optimize_cluster_tolerance=1e-6,
+    #     optimize_cluster_by="threshold_uncertainty",
+    #     optimize_tie_break="earliest_optimal_stage",
+    #     sdp_projective_bob=False,
+    #     sdp_projective_eve=False,
+    #     sdp_npa_level_bob=1,
+    #     sdp_npa_level_eve=1,
+    #     sdp_threads=None,
+    #     sdp_verbose=0,
     # )
     # auto_protocol.print_where_key_optimization_best_stage(leading_newline=True)
 

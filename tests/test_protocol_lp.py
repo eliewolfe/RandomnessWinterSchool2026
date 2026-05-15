@@ -45,6 +45,45 @@ class ProtocolLPTests(unittest.TestCase):
             protocol.eve_uncertainty_master_key_reverse_fano_by_y_lp - protocol.other_party_uncertainty_by_y,
         )
 
+    def test_lp_reporting_defaults_to_averages_with_optional_per_y_detail(self) -> None:
+        data = np.array(
+            [
+                [[0.8, 0.2], [0.55, 0.45]],
+                [[0.3, 0.7], [0.4, 0.6]],
+            ],
+            dtype=float,
+        )
+        scenario = ContextualityScenario(data)
+        protocol = ContextualityProtocol(scenario, master_key_holder="Alice")
+
+        guess_text = protocol.format_eve_guessing_metrics(method="lp")
+        self.assertIn("P_E^guess(master_key|Y) (LP)", guess_text)
+        self.assertNotIn("P_E^guess(master_key|y) (LP)", guess_text)
+
+        guess_text_detailed = protocol.format_eve_guessing_metrics(method="lp", include_per_y_lp=True)
+        self.assertIn("P_E^guess(master_key|y) (LP)", guess_text_detailed)
+
+        uncertainty_text = protocol.format_eve_uncertainty_metrics(method="lp", rate_type="reverse_fano")
+        self.assertIn("H_E(master_key|Y)", uncertainty_text)
+        self.assertNotIn("H_E(master_key|y)", uncertainty_text)
+
+        uncertainty_text_detailed = protocol.format_eve_uncertainty_metrics(
+            method="lp",
+            rate_type="reverse_fano",
+            include_per_y_lp=True,
+        )
+        self.assertIn("H_E(master_key|y)", uncertainty_text_detailed)
+
+        summary_text = protocol.format_key_rate_summary(method="lp", rate_type="reverse_fano")
+        self.assertNotIn("bits per key-generating run by y", summary_text)
+
+        summary_text_detailed = protocol.format_key_rate_summary(
+            method="lp",
+            rate_type="reverse_fano",
+            include_per_y_lp=True,
+        )
+        self.assertIn("bits per key-generating run by y (LP)", summary_text_detailed)
+
 
 if __name__ == "__main__":
     unittest.main()

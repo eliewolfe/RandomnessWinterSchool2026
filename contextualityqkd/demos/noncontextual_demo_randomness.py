@@ -48,12 +48,29 @@ scenario = GPTContextualityScenario(
     verbose=True)
 
 protocol = ContextualityProtocol(
-    scenario,
-    where_key=None, # where_key=None → all x for every y
-    master_key_holder="Bob")
+    scenario=scenario,
+    where_key=None,  # where_key=None → all x for every y
+    master_key_holder="Bob",
+    atol=1e-9,
+    optimize_verbose=None,
+    optimize_cluster_tolerance=1e-6,
+    optimize_cluster_by="threshold_uncertainty",
+    optimize_tie_break="earliest_optimal_stage",
+    sdp_projective_bob=False,
+    sdp_projective_eve=False,
+    sdp_npa_level_bob=1,
+    sdp_npa_level_eve=1,
+    sdp_threads=None,
+    sdp_verbose=0,
+)
 protocol.print_alice_guessing_metrics()
 protocol.print_alice_uncertainty_metrics()
-protocol.print_eve_guessing_metrics(method="lp")
-protocol.print_eve_uncertainty_metrics(method="lp")
-protocol.print_key_rate_summary(method="lp")
+protocol.print_eve_security_metrics(
+    method="both",
+    rate_type="reverse_fano",
+    include_per_y_lp=False,
+    precision_vector=3,
+    precision_scalar=6,
+    leading_newline=True,
+)
 scenario.print_contextuality_measures(precision=3)

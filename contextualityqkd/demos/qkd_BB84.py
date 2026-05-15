@@ -24,8 +24,6 @@ from contextualityqkd.quantum import (
 )
 from contextualityqkd.scenario import ContextualityScenario
 
-RUN_SDP = True
-
 
 def main() -> None:
     # Keep numerical arrays readable while preserving enough detail.
@@ -84,20 +82,25 @@ def main() -> None:
     scenario.print_probabilities(precision=3, representation="symbolic")
 
     protocol = ContextualityProtocol(
-        scenario,
+        scenario=scenario,
         where_key=None,
         master_key_holder="Bob",
-        sdp_projective_bob=True,
-        sdp_projective_eve=True,
+        atol=1e-9,
+        sdp_projective_bob=False,
+        sdp_projective_eve=False,
+        sdp_npa_level_bob=1,
+        sdp_npa_level_eve=1,
         sdp_threads=1,
+        sdp_verbose=2,
     )
-    protocol.print_eve_guessing_metrics(method="lp")
-    protocol.print_eve_uncertainty_metrics(method="lp")
-    protocol.print_key_rate_summary(method="lp")
-    if RUN_SDP:
-        protocol.print_eve_guessing_metrics(method="sdp")
-        protocol.print_eve_uncertainty_metrics(method="sdp")
-        protocol.print_key_rate_summary(method="sdp")
+    protocol.print_eve_security_metrics(
+        method="both",
+        rate_type="reverse_fano",
+        include_per_y_lp=False,
+        precision_vector=3,
+        precision_scalar=6,
+        leading_newline=True,
+    )
     try:
         scenario.print_contextuality_measures(precision=3)
     except ImportError as exc:

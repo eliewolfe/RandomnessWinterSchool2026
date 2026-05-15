@@ -65,6 +65,20 @@ class EveSDPTests(unittest.TestCase):
                     protocol.key_rate_per_key_run(method="lp", rate_type=rate_type),
                 )
 
+    def test_cached_both_method_reporting_blocks(self) -> None:
+        data = np.array([[[0.8, 0.2], [0.55, 0.45]]], dtype=float)
+        scenario = ContextualityScenario(data)
+        protocol = ContextualityProtocol(scenario, where_key=[(0,), (0,)], sdp_threads=1)
+
+        metrics = protocol.eve_guessing_metrics(method="both")
+        self.assertIs(metrics, protocol.eve_guessing_metrics(method="both"))
+        self.assertEqual([block["method"] for block in metrics], ["lp", "sdp"])
+
+        formatted = protocol.format_eve_security_metrics(method="both", rate_type="reverse_fano")
+        self.assertLess(formatted.index("Eve LP guessing metrics"), formatted.index("Eve SDP guessing metrics"))
+        self.assertIn("Key-rate summary (reverse Fano, LP", formatted)
+        self.assertIn("Key-rate summary (reverse Fano, SDP", formatted)
+
 
 if __name__ == "__main__":
     unittest.main()
