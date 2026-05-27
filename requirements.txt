@@ -1,5 +1,6 @@
 numpy
 mosek
+cvxpy
 scipy
 pycddlib
 sympy

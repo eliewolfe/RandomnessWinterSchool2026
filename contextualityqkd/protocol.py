@@ -10,7 +10,7 @@ from typing import Literal, Sequence
 from methodtools import lru_cache
 import numpy as np
 
-from .eve_lp import _solve_eve_guess_key_by_y_lp_hotstart
+from .eve_lp import QKDNoncontextualLP
 from .eve_sdp import QKDNoncontextualSDP
 from .scenario import ContextualityScenario
 
@@ -51,7 +51,11 @@ class ContextualityProtocol:
         sdp_npa_level_eve: int = 1,
         sdp_use_u_only: bool = True,
         sdp_threads: int | None = None,
+        sdp_solver: str = "MOSEK",
         sdp_verbose: int | bool = 0,
+        lp_solver: str = "MOSEK",
+        lp_threads: int | None = None,
+        lp_verbose: int | bool = 0,
     ) -> None:
         if not isinstance(scenario, ContextualityScenario):
             raise TypeError("scenario must be a ContextualityScenario instance.")
@@ -67,7 +71,11 @@ class ContextualityProtocol:
         self.sdp_npa_level_eve = int(sdp_npa_level_eve)
         self.sdp_use_u_only = bool(sdp_use_u_only)
         self.sdp_threads = None if sdp_threads is None else int(sdp_threads)
+        self.sdp_solver = str(sdp_solver)
         self.sdp_verbose = int(sdp_verbose)
+        self.lp_solver = str(lp_solver)
+        self.lp_threads = None if lp_threads is None else int(lp_threads)
+        self.lp_verbose = int(lp_verbose)
 
         if isinstance(where_key, str):
             token = where_key.strip().lower()
@@ -713,16 +721,25 @@ class ContextualityProtocol:
         return float(total / float(self.key_pair_count_total))
 
     @cached_property
+    def eve_key_lp_solver(self) -> QKDNoncontextualLP:
+        """Solved Eve LP for Alice as the master-key holder."""
+        solver = QKDNoncontextualLP(
+            self.scenario,
+            master_key_holder="Alice",
+            where_key=self.where_key,
+            threads=self.lp_threads,
+            solver=self.lp_solver,
+            atol=self.atol,
+            verbose=self.lp_verbose,
+        )
+        solver.solve_lp()
+        return solver
+
+    @cached_property
     def eve_guess_key_by_y_lp(self) -> np.ndarray:
         """Eve LP-optimal key-guessing probabilities per y (NaN for empty key rows)."""
-        return np.asarray(
-            _solve_eve_guess_key_by_y_lp_hotstart(
-                scenario=self.scenario,
-                where_key=self.where_key,
-                master_key="Alice"
-            ),
-            dtype=float,
-        )
+        assert self.eve_key_lp_solver.eve_guess_by_y is not None
+        return np.asarray(self.eve_key_lp_solver.eve_guess_by_y, dtype=float)
 
     @cached_property
     def eve_guess_key_average_y_lp(self) -> float:
@@ -730,16 +747,25 @@ class ContextualityProtocol:
         return float(self._average_over_y(self.eve_guess_key_by_y_lp, y_distribution=None, skip_nan=True))
 
     @cached_property
+    def eve_bob_lp_solver(self) -> QKDNoncontextualLP:
+        """Solved Eve LP for Bob as the master-key holder."""
+        solver = QKDNoncontextualLP(
+            self.scenario,
+            master_key_holder="Bob",
+            where_key=self.where_key,
+            threads=self.lp_threads,
+            solver=self.lp_solver,
+            atol=self.atol,
+            verbose=self.lp_verbose,
+        )
+        solver.solve_lp()
+        return solver
+
+    @cached_property
     def eve_guess_bob_by_y_lp(self) -> np.ndarray:
         """Eve LP-optimal Bob-guessing probabilities per y (NaN for empty key rows)."""
-        return np.asarray(
-            _solve_eve_guess_key_by_y_lp_hotstart(
-                scenario=self.scenario,
-                where_key=self.where_key,
-                master_key="Bob"
-            ),
-            dtype=float,
-        )
+        assert self.eve_bob_lp_solver.eve_guess_by_y is not None
+        return np.asarray(self.eve_bob_lp_solver.eve_guess_by_y, dtype=float)
 
     @cached_property
     def eve_guess_bob_average_y_lp(self) -> float:
@@ -783,16 +809,15 @@ class ContextualityProtocol:
         )
 
     @cached_property
+    def eve_master_key_lp_solver(self) -> QKDNoncontextualLP:
+        """Solved Eve LP for the configured master-key holder."""
+        return self.eve_key_lp_solver if self.master_key_holder == "Alice" else self.eve_bob_lp_solver
+
+    @cached_property
     def eve_guess_master_key_by_y_lp(self) -> np.ndarray:
         """Eve LP-optimal guessing probabilities for the configured master key holder."""
-        return np.asarray(
-            _solve_eve_guess_key_by_y_lp_hotstart(
-                scenario=self.scenario,
-                where_key=self.where_key,
-                master_key=self.master_key_holder,
-            ),
-            dtype=float,
-        )
+        assert self.eve_master_key_lp_solver.eve_guess_by_y is not None
+        return np.asarray(self.eve_master_key_lp_solver.eve_guess_by_y, dtype=float)
 
     @cached_property
     def eve_guess_master_key_average_y_lp(self) -> float:
@@ -870,6 +895,7 @@ class ContextualityProtocol:
             master_key_holder=self.master_key_holder,
             where_key=self.where_key,
             threads=self.sdp_threads,
+            solver=self.sdp_solver,
             atol=self.atol,
             verbose=self.sdp_verbose,
         )
@@ -892,6 +918,7 @@ class ContextualityProtocol:
                 master_key_holder=self.master_key_holder,
                 where_key=self.where_key,
                 threads=self.sdp_threads,
+                solver=self.sdp_solver,
                 atol=self.atol,
                 verbose=self.sdp_verbose,
             )

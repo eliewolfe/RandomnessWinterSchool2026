@@ -1,12 +1,58 @@
 import unittest
 
+import cvxpy as cp
 import numpy as np
 
+import contextualityqkd
+from contextualityqkd.eve_lp import QKDNoncontextualLP
 from contextualityqkd.protocol import ContextualityProtocol
 from contextualityqkd.scenario import ContextualityScenario
 
 
 class ProtocolLPTests(unittest.TestCase):
+    def test_qkd_noncontextual_lp_solves_and_exposes_cvxpy_state(self) -> None:
+        data = np.array(
+            [
+                [[0.8, 0.2], [0.55, 0.45]],
+                [[0.3, 0.7], [0.4, 0.6]],
+            ],
+            dtype=float,
+        )
+        scenario = ContextualityScenario(data)
+        solver = QKDNoncontextualLP(
+            scenario,
+            where_key=[[], [0, 1]],
+            master_key_holder="Bob",
+            solver=cp.CLARABEL,
+        )
+
+        vec = solver.solve_lp()
+
+        self.assertEqual(vec.shape, (2,))
+        self.assertTrue(np.isnan(vec[0]))
+        self.assertTrue(np.isfinite(vec[1]))
+        self.assertIsNotNone(solver.cvxpy_variable)
+        self.assertIsNotNone(solver.cvxpy_problem)
+        self.assertNotIn(0, solver.cvxpy_problems_by_y)
+        self.assertIn(1, solver.cvxpy_problems_by_y)
+        self.assertIn(("probability_nonnegative",), solver.dual_constraints)
+        self.assertIn(("observed_bob", 0, 1, 0), solver.dual_constraints)
+        self.assertIn(1, solver.dual_values_by_y)
+        self.assertIn(("probability_nonnegative",), solver.dual_values_by_y[1])
+        self.assertIsNotNone(solver.solution_probabilities)
+
+    def test_qkd_noncontextual_lp_is_package_exported(self) -> None:
+        self.assertIs(contextualityqkd.QKDNoncontextualLP, QKDNoncontextualLP)
+
+    def test_protocol_passes_lp_solver_option(self) -> None:
+        data = np.array([[[0.8, 0.2]]], dtype=float)
+        scenario = ContextualityScenario(data)
+        protocol = ContextualityProtocol(scenario, where_key=[(0,)], lp_solver="CLARABEL")
+
+        self.assertTrue(np.isfinite(protocol.eve_guessing_probability(method="lp")))
+        self.assertEqual(protocol.eve_master_key_lp_solver.solver, "CLARABEL")
+        self.assertEqual(protocol.eve_master_key_lp_solver.cvxpy_problem.solver_stats.solver_name, "CLARABEL")
+
     def test_eve_lp_vector_and_average(self) -> None:
         data = np.array(
             [

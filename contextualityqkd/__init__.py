@@ -13,11 +13,8 @@ from .extremal_finders import (
 )
 from .scenario import ContextualityScenario
 from .protocol import ContextualityProtocol
-from .eve_sdp import (
-    MomentMatrix,
-    MomentMatrixTemplate,
-    QKDNoncontextualSDP,
-)
+from .eve_lp import QKDNoncontextualLP
+from .eve_sdp import QKDNoncontextualSDP
 from .quantum import (
     GPTContextualityScenario,
     QuantumContextualityScenario,
@@ -27,8 +24,7 @@ from .quantum import (
 __all__ = [
     "ContextualityScenario",
     "ContextualityProtocol",
-    "MomentMatrix",
-    "MomentMatrixTemplate",
+    "QKDNoncontextualLP",
     "QKDNoncontextualSDP",
     "GPTContextualityScenario",
     "QuantumContextualityScenario",

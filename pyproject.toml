@@ -22,6 +22,8 @@ dependencies = [
   "numba",
   "networkx",
   "tqdm",
+  "cvxpy>=1.7.5",
+  "pytest>=9.0.3",
 ]
 
 [tool.setuptools.packages.find]
