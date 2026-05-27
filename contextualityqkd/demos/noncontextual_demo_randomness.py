@@ -52,7 +52,12 @@ protocol = ContextualityProtocol(
     where_key=None,  # where_key=None → all x for every y
     master_key_holder="Bob",
     atol=1e-9,
+    lp_solver="mosek_simplex",
 )
+try:
+    scenario.print_contextuality_measures(metrics=["contextual_fraction"], precision=3, show_inequalities=True, backend_solver="highs")
+except ImportError as exc:
+    print(f"\nContextuality measures skipped: {exc}")
 protocol.print_alice_guessing_metrics()
 protocol.print_alice_uncertainty_metrics()
 protocol.print_eve_security_metrics(
@@ -63,4 +68,4 @@ protocol.print_eve_security_metrics(
     precision_scalar=6,
     leading_newline=True,
 )
-scenario.print_contextuality_measures(precision=3)
+protocol.print_eve_guess_upper_bound_inequality()

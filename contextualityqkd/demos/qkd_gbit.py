@@ -58,6 +58,8 @@ protocol = ContextualityProtocol(
     where_key=[(0,1,2,3),(0,1,2,3)],
     master_key_holder="Alice",
     atol=1e-9,
+    lp_solver="highs",
+    sdp_solver="MOSEK",
     sdp_projective_bob=False,
     sdp_projective_eve=False,
     sdp_npa_level_bob=1,
@@ -77,3 +79,4 @@ protocol.print_eve_security_metrics(
     precision_scalar=6,
     leading_newline=True,
 )
+protocol.print_eve_guess_upper_bound_inequality()

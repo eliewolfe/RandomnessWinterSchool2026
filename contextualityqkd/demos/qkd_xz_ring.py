@@ -104,6 +104,10 @@ def main() -> None:
 
     scenario.print_probabilities(as_p_b_given_x_y=True, precision=3, representation="numeric")
     scenario.print_operational_equivalences(precision=3, representation="numeric")
+    try:
+        scenario.print_contextuality_measures(metrics=["contextual_fraction"], precision=3, show_inequalities=True, backend_solver="highs")
+    except ImportError as exc:
+        print(f"\nContextuality measures skipped: {exc}")
 
     # where_key = _build_good_guess_where_key(
     #     scenario,
@@ -134,6 +138,8 @@ def main() -> None:
         where_key=None,
         master_key_holder="Alice",
         atol=1e-9,
+        lp_solver="mosek_simplex",
+        sdp_solver="MOSEK",
         sdp_projective_bob=False,
         sdp_projective_eve=False,
         sdp_npa_level_bob=1,
@@ -166,11 +172,7 @@ def main() -> None:
         precision_scalar=6,
         leading_newline=True,
     )
-
-    try:
-        scenario.print_contextuality_measures(precision=3)
-    except ImportError as exc:
-        print(f"\nContextuality measures skipped: {exc}")
+    protocol.print_eve_guess_upper_bound_inequality()
 
 
 if __name__ == "__main__":

@@ -23,7 +23,7 @@ class ProtocolLPTests(unittest.TestCase):
             scenario,
             where_key=[[], [0, 1]],
             master_key_holder="Bob",
-            solver=cp.CLARABEL,
+            backend_solver="clarabel",
         )
 
         vec = solver.solve_lp()
@@ -74,6 +74,34 @@ class ProtocolLPTests(unittest.TestCase):
         self.assertGreaterEqual(vec[1], 0.0)
         self.assertLessEqual(vec[1], 1.0)
         self.assertAlmostEqual(protocol.eve_guess_master_key_average_y_lp, float(vec[1]))
+
+    def test_eve_lp_guessing_upper_bound_inequality(self) -> None:
+        data = np.array(
+            [
+                [[0.8, 0.2], [0.55, 0.45]],
+                [[0.3, 0.7], [0.4, 0.6]],
+            ],
+            dtype=float,
+        )
+        scenario = ContextualityScenario(data)
+        protocol = ContextualityProtocol(scenario, master_key_holder="Alice")
+        data_arr = np.asarray(scenario.data_numeric, dtype=float)
+
+        # Per-y witness: <c_y, data> == G(y) (tight upper bound).
+        per_y = protocol.eve_master_key_lp_solver.guess_bound_coeffs_by_y()
+        guesses = protocol.eve_guess_master_key_by_y_lp
+        for y, coeffs in per_y.items():
+            self.assertEqual(coeffs.shape, data_arr.shape)
+            self.assertAlmostEqual(float(np.sum(coeffs * data_arr)), float(guesses[y]), places=6)
+
+        # Aggregated witness reproduces the average guessing probability.
+        coeffs = protocol.eve_guess_master_key_upper_bound_coeffs
+        self.assertEqual(coeffs.shape, data_arr.shape)
+        self.assertAlmostEqual(
+            protocol.eve_guess_master_key_upper_bound_value,
+            protocol.eve_guess_master_key_average_y_lp,
+            places=6,
+        )
 
     def test_reverse_fano_keyrate_outputs(self) -> None:
         data = np.array(

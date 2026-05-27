@@ -35,8 +35,9 @@ import numpy as np
 from .cvxpy_utils import (
     NamedDuals,
     assert_cvxpy_solution_is_optimal,
-    is_mosek_solver,
-    solve_cvxpy_problem_preserving_duals,
+    build_solve_kwargs,
+    resolve_backend_solver,
+    uses_mosek_simplex,
 )
 from .scenario import ContextualityScenario
 
@@ -50,7 +51,7 @@ class QKDNoncontextualLP:
         *,
         master_key_holder: Literal["Alice", "Bob"] | str = "Alice",
         where_key: Sequence[Sequence[int]] | None = None,
-        solver: str | None = None,
+        backend_solver: str = "mosek_simplex",
         threads: int | None = None,
         atol: float | None = None,
         verbose: int | bool = 0,
@@ -66,7 +67,9 @@ class QKDNoncontextualLP:
         self.shape = (self.num_x, self.num_y, self.num_b, self.num_e)
         self.master_key_holder = self._canonicalize_master_key_holder(master_key_holder)
         self.where_key = self._normalize_where_key(where_key)
-        self.solver = cp.MOSEK if solver is None else solver
+        self.backend_solver = str(backend_solver).strip().lower()
+        self.solver = resolve_backend_solver(self.backend_solver)
+        self._mosek_simplex = uses_mosek_simplex(self.backend_solver)
         self.threads = None if threads is None else int(threads)
         self.atol = scenario.atol if atol is None else float(atol)
         self.verbose = int(verbose)
@@ -87,15 +90,17 @@ class QKDNoncontextualLP:
         where_key: Sequence[Sequence[int]] | None = None,
         *,
         master_key_holder: Literal["Alice", "Bob"] | str | None = None,
-        solver: str | None = None,
+        backend_solver: str | None = None,
     ) -> np.ndarray:
         """Solve one Eve guessing LP per Bob setting y."""
         if where_key is not None:
             self.where_key = self._normalize_where_key(where_key)
         if master_key_holder is not None:
             self.master_key_holder = self._canonicalize_master_key_holder(master_key_holder)
-        if solver is not None:
-            self.solver = solver
+        if backend_solver is not None:
+            self.backend_solver = str(backend_solver).strip().lower()
+            self.solver = resolve_backend_solver(self.backend_solver)
+            self._mosek_simplex = uses_mosek_simplex(self.backend_solver)
 
         self._build_problem()
         out = np.full((self.num_y,), np.nan, dtype=float)
@@ -111,26 +116,49 @@ class QKDNoncontextualLP:
 
             # Re-use the single compiled problem; only the cost tensor changes.
             # DPP keeps the canonicalization cached, so this forwards just a new
-            # objective to MOSEK rather than rebuilding the model.
+            # objective to the solver rather than rebuilding the model.
             self.objective_coeffs.value = self.objective_vectors_by_y[y]
-            value = solve_cvxpy_problem_preserving_duals(problem, solve_kwargs)
+            value = float(problem.solve(**solve_kwargs))
             assert_cvxpy_solution_is_optimal(problem=problem, value=value, problem_kind=f"LP for y={y}")
             out[y] = float(value)
             self.cvxpy_problems_by_y[y] = problem
             self.dual_values_by_y[y] = self.duals.snapshot()
+            self._verify_guess_bound_tight(y, out[y])
 
         self.eve_guess_by_y = out
         self.solution_probabilities = self._extract_solution_probabilities()
         return out.copy()
+
+    def _verify_guess_bound_tight(self, y: int, primal_value: float) -> None:
+        """Assert the dual witness reproduces the primal guessing probability.
+
+        The only nonzero-rhs constraint is ``observed_bob`` (rhs = data), so by
+        strong duality ``<c_y, data>`` must equal the primal optimum ``G(y)``.
+        This guards the inequality ``P_guess(y) <= <c_y, P(b|x,y)>`` against any
+        solver-dependent dual sign/convention surprise.
+        """
+        coeffs = self.dual_values_by_y[y].get("observed_bob")
+        if coeffs is None:
+            raise RuntimeError(f"Missing observed_bob dual for y={y}; cannot form the guessing bound.")
+        data = np.asarray(self.scenario.data_numeric, dtype=float)
+        bound = float(np.sum(np.asarray(coeffs, dtype=float) * data))
+        tol = max(1e-6, 1e-5 * abs(primal_value))
+        if not np.isfinite(bound) or abs(bound - primal_value) > tol:
+            raise RuntimeError(
+                f"Eve guessing-bound dual inconsistency at y={y}: primal G={primal_value:.6g} "
+                f"but <c_y, data>={bound:.6g} (|diff| > {tol:.1e}). The dual witness is not tight."
+            )
 
     def solve(
         self,
         where_key: Sequence[Sequence[int]] | None = None,
         *,
         master_key_holder: Literal["Alice", "Bob"] | str | None = None,
-        solver: str | None = None,
+        backend_solver: str | None = None,
     ) -> np.ndarray:
-        return self.solve_lp(where_key=where_key, master_key_holder=master_key_holder, solver=solver)
+        return self.solve_lp(
+            where_key=where_key, master_key_holder=master_key_holder, backend_solver=backend_solver
+        )
 
     def _build_problem(self) -> None:
         self.cvxpy_variable = cp.Variable(self.shape, name="P")
@@ -222,20 +250,26 @@ class QKDNoncontextualLP:
         return np.asarray(self.where_key[int(y)], dtype=int).reshape(-1)
 
     def _solve_kwargs(self) -> dict[str, object]:
-        # `warm_start` is harmless but secondary: the real reuse comes from the
-        # DPP parameter cache above. We deliberately leave MOSEK's presolve
-        # (linear-dependency detection, variable elimination) at its defaults.
-        solve_kwargs: dict[str, object] = {
-            "solver": self.solver,
-            "verbose": self.verbose >= 2,
-            "warm_start": True,
+        return build_solve_kwargs(
+            self.solver,
+            mosek_simplex=self._mosek_simplex,
+            threads=self.threads,
+            verbose=self.verbose >= 2,
+        )
+
+    def guess_bound_coeffs_by_y(self) -> dict[int, np.ndarray]:
+        """Per-y witness coefficients c_y(x,y',b) for the guessing upper bound.
+
+        For each solved y, the dual of the data-consistency constraint gives a
+        linear upper bound on Eve's guessing probability in terms of the
+        observed marginals: ``P_guess(y) <= sum_{x,y',b} c_y(x,y',b) P(b|x,y')``,
+        tight at the observed data.
+        """
+        return {
+            y: np.asarray(snapshot["observed_bob"], dtype=float)
+            for y, snapshot in self.dual_values_by_y.items()
+            if snapshot.get("observed_bob") is not None
         }
-        mosek_params: dict[str, object] = {}
-        if is_mosek_solver(self.solver) and self.threads is not None and self.threads > 0:
-            mosek_params["MSK_IPAR_NUM_THREADS"] = int(self.threads)
-        if mosek_params:
-            solve_kwargs["mosek_params"] = mosek_params
-        return solve_kwargs
 
     def _extract_solution_probabilities(self) -> np.ndarray | None:
         if self.cvxpy_variable is None or self.cvxpy_variable.value is None:

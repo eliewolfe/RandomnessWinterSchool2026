@@ -58,6 +58,7 @@ protocol = ContextualityProtocol(
     where_key=None,  # where_key=None → all x for every y
     master_key_holder="Bob",
     atol=1e-9,
+    lp_solver="mosek_simplex",
 )
 protocol.print_eve_security_metrics(
     method="lp",
@@ -67,3 +68,4 @@ protocol.print_eve_security_metrics(
     precision_scalar=6,
     leading_newline=True,
 )
+protocol.print_eve_guess_upper_bound_inequality()

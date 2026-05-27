@@ -128,6 +128,8 @@ def main() -> None:
         where_key=None,
         master_key_holder="Alice",
         atol=1e-9,
+        lp_solver="highs",
+        sdp_solver="MOSEK",
         sdp_projective_bob=False,
         sdp_projective_eve=False,
         sdp_npa_level_bob=1,
@@ -156,6 +158,10 @@ def main() -> None:
 
     print("\nOperational equivalences:")
     scenario.print_operational_equivalences(precision=3, representation="symbolic")
+    try:
+        scenario.print_contextuality_measures(metrics=["contextual_fraction"], precision=3, show_inequalities=True, backend_solver="highs")
+    except ImportError as exc:
+        print(f"\nContextuality measures skipped: {exc}")
     _print_porac_article_prep_opeqs()
     rank_article, rank_discovered, rank_stacked = _validate_porac_prep_opeq_subspace(scenario)
     print(
@@ -180,6 +186,7 @@ def main() -> None:
         precision_scalar=6,
         leading_newline=True,
     )
+    protocol.print_eve_guess_upper_bound_inequality()
 
     # auto_protocol = ContextualityProtocol(
     #     scenario=scenario,
@@ -195,11 +202,6 @@ def main() -> None:
     #     sdp_verbose=0,
     # )
     # auto_protocol.print_where_key_optimization_best_stage(leading_newline=True)
-
-    try:
-        scenario.print_contextuality_measures(precision=3)
-    except ImportError as exc:
-        print(f"\nContextuality measures skipped: {exc}")
 
 
 if __name__ == "__main__":

@@ -53,7 +53,7 @@ class ContextualityProtocol:
         sdp_threads: int | None = None,
         sdp_solver: str = "MOSEK",
         sdp_verbose: int | bool = 0,
-        lp_solver: str = "MOSEK",
+        lp_solver: str = "mosek_simplex",
         lp_threads: int | None = None,
         lp_verbose: int | bool = 0,
     ) -> None:
@@ -728,7 +728,7 @@ class ContextualityProtocol:
             master_key_holder="Alice",
             where_key=self.where_key,
             threads=self.lp_threads,
-            solver=self.lp_solver,
+            backend_solver=self.lp_solver,
             atol=self.atol,
             verbose=self.lp_verbose,
         )
@@ -754,7 +754,7 @@ class ContextualityProtocol:
             master_key_holder="Bob",
             where_key=self.where_key,
             threads=self.lp_threads,
-            solver=self.lp_solver,
+            backend_solver=self.lp_solver,
             atol=self.atol,
             verbose=self.lp_verbose,
         )
@@ -823,6 +823,50 @@ class ContextualityProtocol:
     def eve_guess_master_key_average_y_lp(self) -> float:
         """Uniform average of Eve LP guess probabilities for the configured master key holder."""
         return float(self._average_over_y(self.eve_guess_master_key_by_y_lp, y_distribution=None, skip_nan=True))
+
+    @cached_property
+    def eve_guess_master_key_upper_bound_coeffs(self) -> np.ndarray:
+        """Coefficients ``c(x,y,b)`` of a linear upper bound on Eve's average guess.
+
+        Each solved per-y LP dual gives ``P_guess(y) <= <c_y, P(b|x,y)>``. Their
+        uniform mean over solved y (matching ``eve_guess_master_key_average_y_lp``)
+        yields ``avg_y P_guess(y) <= <c, P(b|x,y)>``, tight at the observed data.
+        """
+        per_y = self.eve_master_key_lp_solver.guess_bound_coeffs_by_y()
+        shape = (
+            self.scenario.X_cardinality,
+            self.scenario.Y_cardinality,
+            self.scenario.B_cardinality,
+        )
+        if not per_y:
+            return np.zeros(shape, dtype=float)
+        return np.mean(np.stack(list(per_y.values()), axis=0), axis=0)
+
+    @cached_property
+    def eve_guess_master_key_upper_bound_value(self) -> float:
+        """Value of the aggregated guessing-bound inequality at the observed data."""
+        coeffs = self.eve_guess_master_key_upper_bound_coeffs
+        data = np.asarray(self.scenario.data_numeric, dtype=float)
+        return float(np.sum(coeffs * data))
+
+    def format_eve_guess_upper_bound_inequality(self, *, precision: int = 4) -> str:
+        """Render the aggregated linear upper bound on Eve's average guess prob."""
+        from .cvxpy_utils import format_coefficient_groups
+
+        coeffs = self.eve_guess_master_key_upper_bound_coeffs
+        bound = self.eve_guess_master_key_upper_bound_value
+        header = (
+            f"Eve average guessing-probability upper bound (held by {self.master_key_holder}, LP dual):\n"
+            f"  avg_y P_E^guess(master_key|y)  <=  sum_xyb c(x,y,b) P(b|x,y)  =  "
+            f"{ContextualityScenario.format_numeric(bound, precision=precision)}\n"
+            f"  coefficients c:"
+        )
+        return header + "\n" + format_coefficient_groups(coeffs, precision=precision, indent="    ")
+
+    def print_eve_guess_upper_bound_inequality(self, *, precision: int = 4, leading_newline: bool = True) -> None:
+        """Print the aggregated linear upper bound on Eve's average guessing probability."""
+        prefix = "\n" if leading_newline else ""
+        print(prefix + self.format_eve_guess_upper_bound_inequality(precision=precision))
 
     @cached_property
     def eve_uncertainty_master_key_min_entropy_by_y_lp(self) -> np.ndarray:

@@ -1,45 +1,322 @@
 """Simplex-embeddability and contextuality quantifiers for scenarios.
 
-This module uses assignment-ray products to build LPs for:
-1. Dephasing robustness (minimum dephasing to enter the noncontextual cone),
-2. Contextual fraction (maximum noncontextual subbehavior mass).
+A behavior ``P(b|x,y)`` is noncontextual iff it lies in the cone spanned by the
+products of preparation- and effect-assignment extremal rays,
+``S_ij(x,y,b) = prep_i(x) * effect_j(y,b)``. Two monotones quantify how far the
+observed data sits from that cone, both as readable CVXPY LPs over a single
+nonnegative weight array ``w[i, j]``:
+
+1. **Contextual fraction** -- ``1 - lambda*`` where ``lambda*`` is the maximum
+   uniform mass of a noncontextual subbehavior ``S <= P``.
+2. **Dephasing robustness** -- the minimum ``r`` such that ``(1-r)P + r D`` is
+   noncontextual (``D`` a dephasing target).
+
+Each LP's dual yields a **noncontextuality inequality** (a separating
+hyperplane) that the observed data violates by exactly the monotone value, so a
+zero violation certifies simplex-embeddability.
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from functools import cached_property
+from typing import Literal
 
-import mosek
+import cvxpy as cp
 import numpy as np
-from scipy.sparse import csc_matrix
 
+from .cvxpy_utils import (
+    NamedDuals,
+    assert_cvxpy_solution_is_optimal,
+    build_solve_kwargs,
+    resolve_backend_solver,
+    uses_mosek_simplex,
+)
 from .linalg_utils import enumerate_cone_extremal_rays, select_linearly_independent_rows
 from .scenario import ContextualityScenario
 
 
-@dataclass
-class SimplexEmbeddabilityResult:
-    """Result bundle for simplex-embeddability assessment."""
-
-    is_simplex_embeddable: bool
-    dephasing_robustness: float
-    preparation_extremals: np.ndarray
-    effect_extremals: np.ndarray
-    coupling_weights: np.ndarray | None
-    solver_status: str
-    dephasing_target: np.ndarray
+Monotone = Literal["contextual_fraction", "dephasing_robustness"]
+_MONOTONES: tuple[Monotone, ...] = ("contextual_fraction", "dephasing_robustness")
 
 
-@dataclass
-class ContextualFractionResult:
-    """Result bundle for contextual-fraction assessment."""
+class NoncontextualityAssessment:
+    """Contextuality monotones plus dual noncontextuality-inequality witnesses.
 
-    noncontextual_fraction: float
-    contextual_fraction: float
-    preparation_extremals: np.ndarray
-    effect_extremals: np.ndarray
-    coupling_weights: np.ndarray | None
-    solver_status: str
+    A single class computes either or both monotones for ``scenario`` over a
+    shared nonnegative weight variable ``w`` and shared subbehavior expression
+    ``S = sum_ij w_ij prep_i (x) effect_j``. Numeric results and the witness
+    inequality/violation for each monotone are exposed as cached properties.
+    """
+
+    def __init__(
+        self,
+        scenario: ContextualityScenario,
+        *,
+        monotone: Monotone | Literal["both"] = "contextual_fraction",
+        dephasing_target: np.ndarray | None = None,
+        atol: float | None = None,
+        backend_solver: str = "highs",
+        threads: int | None = None,
+        verbose: int | bool = 0,
+    ) -> None:
+        if not isinstance(scenario, ContextualityScenario):
+            raise TypeError("scenario must be a ContextualityScenario instance.")
+        self.scenario = scenario
+        self.num_x = int(scenario.X_cardinality)
+        self.num_y = int(scenario.Y_cardinality)
+        self.num_b = int(scenario.B_cardinality)
+        self.atol = scenario.atol if atol is None else float(atol)
+        self.backend_solver = str(backend_solver).strip().lower()
+        self.solver = resolve_backend_solver(self.backend_solver)
+        self._mosek_simplex = uses_mosek_simplex(self.backend_solver)
+        self.threads = None if threads is None else int(threads)
+        self.verbose = int(verbose)
+        self.requested_monotones = self._normalize_monotone(monotone)
+        self._dephasing_target_arg = dephasing_target
+        self._solved: dict[Monotone, dict[str, object]] = {}
+
+    def solve(self) -> "NoncontextualityAssessment":
+        """Eagerly solve every requested monotone; return self for chaining."""
+        for monotone in self.requested_monotones:
+            self._ensure_solved(monotone)
+        return self
+
+    # ----- numeric results (each solves its monotone lazily, then caches) -----
+
+    @cached_property
+    def noncontextual_fraction(self) -> float:
+        """Maximum uniform mass ``lambda*`` of a noncontextual subbehavior."""
+        return float(self._ensure_solved("contextual_fraction")["noncontextual_fraction"])
+
+    @cached_property
+    def contextual_fraction(self) -> float:
+        """``1 - noncontextual_fraction``."""
+        return float(self._ensure_solved("contextual_fraction")["measure"])
+
+    @cached_property
+    def dephasing_robustness(self) -> float:
+        """Minimum dephasing ``r*`` to enter the noncontextual cone (may be < 0)."""
+        return float(self._ensure_solved("dephasing_robustness")["measure"])
+
+    @cached_property
+    def is_simplex_embeddable(self) -> bool:
+        """True iff the behavior is already noncontextual (``r* <= atol``)."""
+        return bool(self.dephasing_robustness <= self.atol)
+
+    @cached_property
+    def contextual(self) -> bool:
+        """True iff the requested monotone certifies contextuality (measure > atol)."""
+        if "contextual_fraction" in self.requested_monotones:
+            return bool(self.contextual_fraction > self.atol)
+        return bool(self.dephasing_robustness > self.atol)
+
+    @cached_property
+    def dephasing_target(self) -> np.ndarray:
+        """The dephasing target ``D`` used by the robustness LP."""
+        return self._resolve_dephasing_target()
+
+    # ----- per-monotone bundles (dict keyed by requested monotone) -----
+
+    @cached_property
+    def coupling_weights(self) -> dict[Monotone, np.ndarray]:
+        """Decomposition weights ``w[i, j]`` per requested monotone."""
+        return {m: self._ensure_solved(m)["weights"] for m in self.requested_monotones}
+
+    @cached_property
+    def subbehavior(self) -> dict[Monotone, np.ndarray]:
+        """Reconstructed (sub)behavior ``S(x, y, b)`` per requested monotone."""
+        return {m: self._ensure_solved(m)["subbehavior"] for m in self.requested_monotones}
+
+    @cached_property
+    def dual_values(self) -> dict[Monotone, dict[str, np.ndarray | None]]:
+        """Array-valued constraint duals per requested monotone."""
+        return {m: self._ensure_solved(m)["duals"] for m in self.requested_monotones}
+
+    # ----- dual noncontextuality-inequality witnesses -----
+
+    @cached_property
+    def inequality(self) -> dict[Monotone, np.ndarray]:
+        """Witness functional ``alpha(x, y, b)`` (shape of ``P``) per monotone."""
+        return {m: self._ensure_solved(m)["alpha"] for m in self.requested_monotones}
+
+    @cached_property
+    def inequality_bound(self) -> dict[Monotone, float]:
+        """Noncontextual bound ``beta`` per monotone (``<alpha, N> sense beta``)."""
+        return {m: float(self._ensure_solved(m)["bound"]) for m in self.requested_monotones}
+
+    @cached_property
+    def inequality_sense(self) -> dict[Monotone, str]:
+        """Sense ``"<="`` or ``">="`` satisfied by all noncontextual behaviors."""
+        return {m: str(self._ensure_solved(m)["sense"]) for m in self.requested_monotones}
+
+    @cached_property
+    def violation(self) -> dict[Monotone, float]:
+        """Signed amount the observed data breaks the inequality (== measure)."""
+        return {m: float(self._ensure_solved(m)["violation"]) for m in self.requested_monotones}
+
+    # ----- shared model scaffolding -----
+
+    @cached_property
+    def prep_extremals(self) -> np.ndarray:
+        """Extremal preparation-assignment rays, shape ``(N_prep, num_x)``."""
+        return preparation_assignment_extremals(self.scenario, atol=self.atol)
+
+    @cached_property
+    def effect_extremals(self) -> np.ndarray:
+        """Extremal effect-assignment rays, shape ``(N_eff, num_y, num_b)``."""
+        return effect_assignment_extremals(self.scenario, atol=self.atol)
+
+    @cached_property
+    def _weights(self) -> cp.Variable:
+        n_prep = self.prep_extremals.shape[0]
+        n_eff = self.effect_extremals.shape[0]
+        return cp.Variable((n_prep, n_eff), nonneg=True, name="w")
+
+    @cached_property
+    def _subbehavior_expr(self) -> cp.Expression:
+        """``S(x, y, b) = sum_ij w_ij prep_i(x) effect_j(y, b)`` via two matmuls."""
+        prep = self.prep_extremals                       # (N_prep, num_x)
+        effect_flat = self.effect_extremals.reshape(self.effect_extremals.shape[0], -1)  # C-order
+        effect_mix = self._weights @ effect_flat         # (N_prep, num_y*num_b)
+        flat = prep.T @ effect_mix                       # (num_x, num_y*num_b)
+        return cp.reshape(flat, (self.num_x, self.num_y, self.num_b), order="C")
+
+    def _build_contextual_fraction(self) -> dict[str, object]:
+        """max lambda  s.t.  S <= P,  sum_b S == lambda,  0 <= lambda <= 1."""
+        data = np.asarray(self.scenario.data_numeric, dtype=float)
+        S = self._subbehavior_expr
+        lam = cp.Variable(name="lambda")
+        duals = NamedDuals()
+        duals.add("subbehavior_le_data", S <= data)          # mu >= 0
+        duals.add("uniform_mass", cp.sum(S, axis=2) == lam)  # nu; per-(x,y) mass equals lambda
+        problem = cp.Problem(cp.Maximize(lam), duals.constraints + [lam <= 1.0])  # S, lambda >= 0 implied
+        return {"problem": problem, "duals": duals}
+
+    def _build_dephasing_robustness(self) -> dict[str, object]:
+        """min r  s.t.  S == (1 - r) P + r D,  r free."""
+        data = np.asarray(self.scenario.data_numeric, dtype=float)
+        target = self._resolve_dephasing_target()
+        S = self._subbehavior_expr
+        r = cp.Variable(name="r")
+        duals = NamedDuals()
+        duals.add("dephased_behavior", S == (1.0 - r) * data + r * target)  # witness functional
+        problem = cp.Problem(cp.Minimize(r), duals.constraints)
+        return {"problem": problem, "duals": duals}
+
+    def _ensure_solved(self, monotone: Monotone) -> dict[str, object]:
+        monotone = self._canonical_monotone(monotone)
+        if monotone in self._solved:
+            return self._solved[monotone]
+
+        spec = (
+            self._build_contextual_fraction()
+            if monotone == "contextual_fraction"
+            else self._build_dephasing_robustness()
+        )
+        problem: cp.Problem = spec["problem"]  # type: ignore[assignment]
+        duals: NamedDuals = spec["duals"]      # type: ignore[assignment]
+
+        # These are pure LPs (Zero + NonNeg cones); CVXPY returns all duals
+        # directly, so no special dual-reshape workaround is needed.
+        value = float(problem.solve(**self._solve_kwargs()))
+        assert_cvxpy_solution_is_optimal(problem=problem, value=value, problem_kind=f"{monotone} LP")
+
+        dual_arrays = duals.snapshot()
+        solution = self._extract(monotone, value=float(value), dual_arrays=dual_arrays)
+        self._solved[monotone] = solution
+        return solution
+
+    def _extract(
+        self,
+        monotone: Monotone,
+        *,
+        value: float,
+        dual_arrays: dict[str, np.ndarray | None],
+    ) -> dict[str, object]:
+        data = np.asarray(self.scenario.data_numeric, dtype=float)
+        weights = np.asarray(self._weights.value, dtype=float)
+        subbehavior = np.asarray(self._subbehavior_expr.value, dtype=float)
+
+        if monotone == "contextual_fraction":
+            noncontextual = self._validated_noncontextual_fraction(value)
+            measure = 1.0 - noncontextual
+            # Witness functional c = -(mu + nu): mu the dual of S <= P, nu the
+            # dual of the uniform-mass equality (broadcast over b). Every
+            # noncontextual cone behavior N satisfies <c, N> <= 0, while
+            # <c, P> = 1 - lambda* = contextual_fraction > 0 violates it.
+            mu = np.asarray(dual_arrays["subbehavior_le_data"], dtype=float)
+            nu = np.asarray(dual_arrays["uniform_mass"], dtype=float)
+            alpha = -(mu + nu[:, :, None])
+            bound = 0.0
+            sense = "<="
+            violation = float(np.sum(alpha * data)) - bound
+            extra = {"noncontextual_fraction": noncontextual}
+        else:
+            measure = float(value)  # r*
+            # Witness: y (dual of the behavior equality) gives <y, N> <= 0 for all
+            # noncontextual N, while <y, P> = r* (= measure). CVXPY returns the
+            # equality dual with the opposite sign to this orientation, so negate.
+            alpha = -np.asarray(dual_arrays["dephased_behavior"], dtype=float)
+            bound = 0.0
+            sense = "<="
+            violation = float(np.sum(alpha * data)) - bound
+            extra = {}
+
+        return {
+            "measure": float(measure),
+            "weights": weights,
+            "subbehavior": subbehavior,
+            "duals": dual_arrays,
+            "alpha": alpha,
+            "bound": float(bound),
+            "sense": sense,
+            "violation": float(violation),
+            **extra,
+        }
+
+    def _validated_noncontextual_fraction(self, value: float) -> float:
+        if not np.isfinite(value):
+            return float("nan")
+        if value < -10.0 * self.atol or value > 1.0 + 10.0 * self.atol:
+            raise RuntimeError(
+                "Solved noncontextual_fraction is outside [0, 1] beyond tolerance. "
+                "This indicates a numerical/solver issue."
+            )
+        return float(np.clip(value, 0.0, 1.0))
+
+    def _resolve_dephasing_target(self) -> np.ndarray:
+        data = np.asarray(self.scenario.data_numeric, dtype=float)
+        if self._dephasing_target_arg is None:
+            return _default_dephasing_target(data, atol=self.atol)
+        return _validate_dephasing_target(
+            np.asarray(self._dephasing_target_arg, dtype=float),
+            shape=data.shape,
+            atol=self.atol,
+        )
+
+    def _solve_kwargs(self) -> dict[str, object]:
+        return build_solve_kwargs(
+            self.solver,
+            mosek_simplex=self._mosek_simplex,
+            threads=self.threads,
+            verbose=self.verbose >= 2,
+        )
+
+    @staticmethod
+    def _normalize_monotone(monotone: str) -> tuple[Monotone, ...]:
+        token = str(monotone).strip().lower()
+        if token == "both":
+            return _MONOTONES
+        return (NoncontextualityAssessment._canonical_monotone(token),)
+
+    @staticmethod
+    def _canonical_monotone(monotone: str) -> Monotone:
+        token = str(monotone).strip().lower()
+        if token in _MONOTONES:
+            return token  # type: ignore[return-value]
+        raise ValueError(
+            f"monotone must be one of {_MONOTONES} or 'both', got {monotone!r}."
+        )
 
 
 def preparation_assignment_extremals(
@@ -50,8 +327,7 @@ def preparation_assignment_extremals(
 
     The preparation-assignment cone is defined over variables ``p(x)``:
     - ``p(x) >= 0`` for all ``x``
-    - every preparation OPEQ holds pointwise:
-      ``sum_x c[x] p(x) = 0``
+    - every preparation OPEQ holds pointwise: ``sum_x c[x] p(x) = 0``
     """
     tol = scenario.atol if atol is None else float(atol)
     rays_flat = _assignment_extremal_rays(
@@ -71,8 +347,7 @@ def effect_assignment_extremals(
 
     The effect-assignment cone is defined over variables ``q(y,b)``:
     - ``q(y,b) >= 0`` for all ``y,b``
-    - every measurement OPEQ holds pointwise:
-      ``sum_{y,b} d[y,b] q(y,b) = 0``
+    - every measurement OPEQ holds pointwise: ``sum_{y,b} d[y,b] q(y,b) = 0``
     """
     tol = scenario.atol if atol is None else float(atol)
     rays_flat = _assignment_extremal_rays(
@@ -89,112 +364,6 @@ def effect_assignment_extremals(
         label="effect assignment extremals",
     )
     return rays
-
-
-def assess_simplex_embeddability(
-    scenario: ContextualityScenario,
-    dephasing_target: np.ndarray | None = None,
-    atol: float | None = None,
-) -> SimplexEmbeddabilityResult:
-    """Assess simplex embeddability and dephasing robustness.
-
-    Computes the minimum ``r in [0,1]`` such that the dephased behavior
-    ``(1-r)P + r D`` admits a nonnegative assignment-ray decomposition.
-    """
-    tol = scenario.atol if atol is None else float(atol)
-    data_numeric = scenario.data_numeric
-    prep_extremals = preparation_assignment_extremals(scenario, atol=tol)
-    effect_extremals = effect_assignment_extremals(scenario, atol=tol)
-    target = (
-        _default_dephasing_target(data_numeric, atol=tol)
-        if dephasing_target is None
-        else _validate_dephasing_target(
-            np.asarray(dephasing_target, dtype=float),
-            shape=data_numeric.shape,
-            atol=tol,
-        )
-    )
-
-    robustness, weights, status = _solve_dephasing_robustness_lp(
-        data=data_numeric,
-        dephasing_target=target,
-        prep_extremals=prep_extremals,
-        effect_extremals=effect_extremals,
-        atol=tol,
-    )
-    return SimplexEmbeddabilityResult(
-        is_simplex_embeddable=bool(np.isfinite(robustness) and robustness <= tol),
-        dephasing_robustness=float(robustness),
-        preparation_extremals=prep_extremals,
-        effect_extremals=effect_extremals,
-        coupling_weights=weights,
-        solver_status=status,
-        dephasing_target=target,
-    )
-
-
-def contextuality_robustness_to_dephasing(
-    scenario: ContextualityScenario,
-    dephasing_target: np.ndarray | None = None,
-    atol: float | None = None,
-) -> float:
-    """Return only the contextuality measure: robustness to dephasing."""
-    return assess_simplex_embeddability(
-        scenario=scenario,
-        dephasing_target=dephasing_target,
-        atol=atol,
-    ).dephasing_robustness
-
-
-def assess_contextual_fraction(
-    scenario: ContextualityScenario,
-    atol: float | None = None,
-) -> ContextualFractionResult:
-    """Assess noncontextual/contextual fractions via a cone-subbehavior LP."""
-    tol = scenario.atol if atol is None else float(atol)
-    data_numeric = scenario.data_numeric
-    prep_extremals = preparation_assignment_extremals(scenario, atol=tol)
-    effect_extremals = effect_assignment_extremals(scenario, atol=tol)
-
-    noncontextual, weights, status = _solve_noncontextual_fraction_lp(
-        data=data_numeric,
-        prep_extremals=prep_extremals,
-        effect_extremals=effect_extremals,
-        atol=tol,
-    )
-    if np.isfinite(noncontextual):
-        if noncontextual < -10.0 * tol or noncontextual > 1.0 + 10.0 * tol:
-            raise RuntimeError(
-                "Solved noncontextual_fraction is outside [0, 1] beyond tolerance. "
-                "This indicates a numerical/solver issue."
-            )
-        noncontextual = float(np.clip(noncontextual, 0.0, 1.0))
-    contextual = (1.0 - noncontextual) if np.isfinite(noncontextual) else float("nan")
-
-    return ContextualFractionResult(
-        noncontextual_fraction=float(noncontextual),
-        contextual_fraction=float(contextual),
-        preparation_extremals=prep_extremals,
-        effect_extremals=effect_extremals,
-        coupling_weights=weights,
-        solver_status=status,
-    )
-
-
-def noncontextual_fraction(
-    scenario: ContextualityScenario,
-    atol: float | None = None,
-) -> float:
-    """Return only the noncontextual fraction."""
-    return assess_contextual_fraction(scenario=scenario, atol=atol).noncontextual_fraction
-
-
-def contextual_fraction(
-    scenario: ContextualityScenario,
-    atol: float | None = None,
-) -> float:
-    """Return only the contextual fraction."""
-    return assess_contextual_fraction(scenario=scenario, atol=atol).contextual_fraction
 
 
 def _assignment_extremal_rays(
@@ -231,239 +400,6 @@ def _assert_zero_on_invalid_support(
         raise RuntimeError(f"{label} have nonzero entries on padded invalid coordinates.")
 
 
-def _solve_dephasing_robustness_lp(
-    data: np.ndarray,
-    dephasing_target: np.ndarray,
-    prep_extremals: np.ndarray,
-    effect_extremals: np.ndarray,
-    atol: float,
-) -> tuple[float, np.ndarray | None, str]:
-    num_prep_vertices, num_effect_vertices, coeff_weights, _ = _assignment_product_blocks(
-        prep_extremals=prep_extremals,
-        effect_extremals=effect_extremals,
-        data_shape=data.shape,
-        atol=atol,
-    )
-    if dephasing_target.shape != data.shape:
-        raise ValueError("dephasing_target must match data shape.")
-
-    num_weights = num_prep_vertices * num_effect_vertices
-    num_vars = num_weights + 1  # +1 for r
-    num_rows = coeff_weights.shape[0]
-
-    coeff_r = -(
-        dephasing_target - data
-    ).reshape(num_rows, 1)
-    coeff_matrix = np.hstack([coeff_weights, coeff_r])
-    coeff_matrix = np.where(np.abs(coeff_matrix) <= atol, 0.0, coeff_matrix)
-
-    sparse = csc_matrix(coeff_matrix)
-    aptrb = sparse.indptr[:-1].astype(np.int64, copy=False)
-    aptre = sparse.indptr[1:].astype(np.int64, copy=False)
-    asub = sparse.indices.astype(np.int32, copy=False)
-    aval = sparse.data.astype(np.float64, copy=False)
-
-    rhs = data.reshape(num_rows).astype(np.float64, copy=False)
-    c = np.zeros(num_vars, dtype=np.float64)
-    c[-1] = 1.0
-
-    bkc = [mosek.boundkey.fx] * num_rows
-    blc = rhs
-    buc = rhs
-
-    bkx = [mosek.boundkey.lo] * num_weights + [mosek.boundkey.fr]
-    blx = np.zeros(num_vars, dtype=np.float64)
-    bux = np.full(num_vars, np.inf, dtype=np.float64)
-
-    with mosek.Env() as env:
-        with env.Task(0, 0) as task:
-            task.inputdata(
-                num_rows,
-                num_vars,
-                c,
-                0.0,
-                aptrb,
-                aptre,
-                asub,
-                aval,
-                bkc,
-                blc,
-                buc,
-                bkx,
-                blx,
-                bux,
-            )
-
-            # Prefer basic/corner LP solutions for decomposition weights.
-            task.putintparam(mosek.iparam.optimizer, mosek.optimizertype.primal_simplex)
-            task.putobjsense(mosek.objsense.minimize)
-            task.optimize()
-
-            xx, status = _extract_optimal_solution_vector(task, num_vars=num_vars, atol=atol)
-            if xx is not None:
-                robustness = float(xx[-1])
-                weights = xx[:-1].reshape(num_prep_vertices, num_effect_vertices)
-                return robustness, weights, status
-            return float("inf"), None, status
-
-    return float("inf"), None, "unknown"
-
-
-def _solve_noncontextual_fraction_lp(
-    data: np.ndarray,
-    prep_extremals: np.ndarray,
-    effect_extremals: np.ndarray,
-    atol: float,
-) -> tuple[float, np.ndarray | None, str]:
-    (
-        num_prep_vertices,
-        num_effect_vertices,
-        coeff_weights,
-        mass_weights,
-    ) = _assignment_product_blocks(
-        prep_extremals=prep_extremals,
-        effect_extremals=effect_extremals,
-        data_shape=data.shape,
-        atol=atol,
-    )
-
-    num_weights = num_prep_vertices * num_effect_vertices
-    num_vars = num_weights + 1  # +1 for lambda
-    num_rows_data = coeff_weights.shape[0]
-    num_rows_mass = mass_weights.shape[0]
-    num_rows = num_rows_data + num_rows_mass
-
-    # Inequalities: S <= P
-    coeff_data = np.hstack([coeff_weights, np.zeros((num_rows_data, 1), dtype=float)])
-    # Equal mass per (x,y): sum_ab S - lambda = 0
-    coeff_mass = np.hstack([mass_weights, -np.ones((num_rows_mass, 1), dtype=float)])
-    coeff_matrix = np.vstack([coeff_data, coeff_mass])
-    coeff_matrix = np.where(np.abs(coeff_matrix) <= atol, 0.0, coeff_matrix)
-
-    sparse = csc_matrix(coeff_matrix)
-    aptrb = sparse.indptr[:-1].astype(np.int64, copy=False)
-    aptre = sparse.indptr[1:].astype(np.int64, copy=False)
-    asub = sparse.indices.astype(np.int32, copy=False)
-    aval = sparse.data.astype(np.float64, copy=False)
-
-    rhs_data = data.reshape(num_rows_data).astype(np.float64, copy=False)
-    rhs_mass = np.zeros(num_rows_mass, dtype=np.float64)
-
-    bkc = [mosek.boundkey.up] * num_rows_data + [mosek.boundkey.fx] * num_rows_mass
-    blc = np.concatenate(
-        [
-            np.full(num_rows_data, -np.inf, dtype=np.float64),
-            rhs_mass,
-        ]
-    )
-    buc = np.concatenate([rhs_data, rhs_mass])
-
-    c = np.zeros(num_vars, dtype=np.float64)
-    c[-1] = 1.0
-
-    bkx = [mosek.boundkey.lo] * num_weights + [mosek.boundkey.ra]
-    blx = np.zeros(num_vars, dtype=np.float64)
-    bux = np.full(num_vars, np.inf, dtype=np.float64)
-    bux[-1] = 1.0
-
-    with mosek.Env() as env:
-        with env.Task(0, 0) as task:
-            task.inputdata(
-                num_rows,
-                num_vars,
-                c,
-                0.0,
-                aptrb,
-                aptre,
-                asub,
-                aval,
-                bkc,
-                blc,
-                buc,
-                bkx,
-                blx,
-                bux,
-            )
-
-            # Prefer basic/corner LP solutions for decomposition weights.
-            task.putintparam(mosek.iparam.optimizer, mosek.optimizertype.primal_simplex)
-            task.putobjsense(mosek.objsense.maximize)
-            task.optimize()
-
-            xx, status = _extract_optimal_solution_vector(task, num_vars=num_vars, atol=atol)
-            if xx is not None:
-                noncontextual = float(xx[-1])
-                weights = xx[:-1].reshape(num_prep_vertices, num_effect_vertices)
-                return noncontextual, weights, status
-            return float("nan"), None, status
-
-    return float("nan"), None, "unknown"
-
-
-def _assignment_product_blocks(
-    prep_extremals: np.ndarray,
-    effect_extremals: np.ndarray,
-    data_shape: tuple[int, int, int],
-    atol: float,
-) -> tuple[int, int, np.ndarray, np.ndarray]:
-    """Build ray-product coefficient blocks for data and per-(x,y) mass rows."""
-    num_prep_vertices, num_x = prep_extremals.shape
-    num_effect_vertices, num_y, num_b = effect_extremals.shape
-    if data_shape != (num_x, num_y, num_b):
-        raise ValueError("data shape is inconsistent with extremal assignment dimensions.")
-
-    num_weights = num_prep_vertices * num_effect_vertices
-    num_rows_data = num_x * num_y * num_b
-
-    prep_flat = prep_extremals.reshape(num_prep_vertices, num_x)
-    effect_flat = effect_extremals.reshape(num_effect_vertices, num_y * num_b)
-
-    # Rows indexed by (x,y,b).
-    coeff_weights = (
-        np.einsum("ix,jq->ijxq", prep_flat, effect_flat, optimize=True)
-        .reshape(num_weights, num_rows_data)
-        .T
-    )
-
-    prep_masses = prep_extremals  # (N_prep, X)
-    effect_masses = effect_extremals.sum(axis=2)  # (N_eff, Y)
-    mass_weights = (
-        np.einsum("ix,jy->ijxy", prep_masses, effect_masses, optimize=True)
-        .reshape(num_weights, num_x * num_y)
-        .T
-    )
-
-    coeff_weights = np.where(np.abs(coeff_weights) <= atol, 0.0, coeff_weights)
-    mass_weights = np.where(np.abs(mass_weights) <= atol, 0.0, mass_weights)
-    return num_prep_vertices, num_effect_vertices, coeff_weights, mass_weights
-
-
-def _extract_optimal_solution_vector(
-    task: mosek.Task,
-    num_vars: int,
-    atol: float,
-) -> tuple[np.ndarray | None, str]:
-    """Return an optimal primal vector if available, otherwise ``(None, status)``."""
-    acceptable_statuses = {mosek.solsta.optimal}
-    if hasattr(mosek.solsta, "integer_optimal"):
-        acceptable_statuses.add(mosek.solsta.integer_optimal)
-
-    final_status = "unknown"
-    # Prefer a basic LP solution (corner point) when available.
-    for soltype in (mosek.soltype.bas, mosek.soltype.itr):
-        try:
-            solsta = task.getsolsta(soltype)
-        except mosek.Error:
-            continue
-        final_status = str(solsta)
-        if solsta in acceptable_statuses:
-            xx = np.zeros(num_vars, dtype=float)
-            task.getxx(soltype, xx)
-            xx = np.where(np.abs(xx) <= atol, 0.0, xx)
-            return xx, str(solsta)
-    return None, final_status
-
-
 def _default_dephasing_target(data: np.ndarray, atol: float) -> np.ndarray:
     """Default dephasing target ``D`` built from data marginals.
 
@@ -497,3 +433,10 @@ def _normalize_rows(mat: np.ndarray, atol: float) -> np.ndarray:
     if np.any(row_sums <= atol):
         raise ValueError("Cannot normalize rows with zero total mass.")
     return arr / row_sums
+
+
+__all__ = [
+    "NoncontextualityAssessment",
+    "preparation_assignment_extremals",
+    "effect_assignment_extremals",
+]

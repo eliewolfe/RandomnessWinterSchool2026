@@ -132,6 +132,122 @@ def is_mosek_solver(solver: object) -> bool:
     return str(solver).upper() == str(cp.MOSEK).upper()
 
 
+_BACKEND_SOLVERS = {
+    "mosek": cp.MOSEK,          # interior-point: dense but symmetric dual
+    "mosek_simplex": cp.MOSEK,  # dual simplex (+ bfs): sparse vertex dual
+    "highs": cp.HIGHS,          # simplex: sparse vertex dual
+    "simplex": cp.HIGHS,
+    "clarabel": cp.CLARABEL,
+    "scipy": cp.SCIPY,
+    "scs": cp.SCS,
+}
+
+
+def resolve_backend_solver(backend_solver: str) -> str:
+    """Map a friendly backend name to a CVXPY solver token."""
+    token = str(backend_solver).strip().lower()
+    if token not in _BACKEND_SOLVERS:
+        raise ValueError(
+            f"backend_solver must be one of {sorted(_BACKEND_SOLVERS)}, got {backend_solver!r}."
+        )
+    return _BACKEND_SOLVERS[token]
+
+
+def uses_mosek_simplex(backend_solver: str) -> bool:
+    """Whether a backend name requests MOSEK's (dual) simplex optimizer."""
+    return str(backend_solver).strip().lower() == "mosek_simplex"
+
+
+def build_solve_kwargs(
+    solver: str,
+    *,
+    mosek_simplex: bool = False,
+    threads: int | None = None,
+    verbose: bool = False,
+) -> dict[str, object]:
+    """Assemble ``problem.solve`` kwargs shared by the LP backends.
+
+    For MOSEK simplex we set the dual-simplex optimizer and ``bfs=True`` so
+    CVXPY reads MOSEK's basic (vertex) solution, which yields a sparse dual
+    witness.
+    """
+    # These backends model with N-dimensional (>2-D) array variables, which the
+    # C++ canonicalization backend does not support; choose the SCIPY backend
+    # explicitly so CVXPY does not emit a "defaulting to SCIPY backend" warning.
+    solve_kwargs: dict[str, object] = {
+        "solver": solver,
+        "verbose": bool(verbose),
+        "canon_backend": cp.SCIPY_CANON_BACKEND,
+    }
+    mosek_params: dict[str, object] = {}
+    if is_mosek_solver(solver):
+        if mosek_simplex:
+            mosek_params["MSK_IPAR_OPTIMIZER"] = "MSK_OPTIMIZER_DUAL_SIMPLEX"
+            solve_kwargs["bfs"] = True
+        if threads is not None and threads > 0:
+            mosek_params["MSK_IPAR_NUM_THREADS"] = int(threads)
+    if mosek_params:
+        solve_kwargs["mosek_params"] = mosek_params
+    return solve_kwargs
+
+
+def _default_pbxy_label(index: tuple[int, ...]) -> str:
+    """Default term label for a ``(x, y, b)`` index into ``P(b|x,y)``."""
+    x, y, b = (int(i) for i in index)
+    return f"P({b}|{x},{y})"
+
+
+def coefficient_value_groups(
+    coeffs: np.ndarray,
+    *,
+    atol: float = 1e-9,
+    decimals: int = 6,
+) -> list[tuple[float, list[tuple[int, ...]]]]:
+    """Group nonzero coefficients by (rounded) value.
+
+    ``coeffs`` is an array shaped like ``P(b|x,y)``. Returns a list of
+    ``(value, index_tuples)`` pairs, sorted by descending value, where each
+    ``index_tuple`` is a multi-index of ``coeffs`` carrying that value. This is
+    the shared core for turning an LP dual into a readable inequality.
+    """
+    arr = np.asarray(coeffs, dtype=float)
+    flat = arr.reshape(-1)
+    nonzero = np.flatnonzero(np.abs(flat) > atol)
+    if nonzero.size == 0:
+        return []
+    rounded = np.round(flat[nonzero], decimals)
+    groups: list[tuple[float, list[tuple[int, ...]]]] = []
+    for value in sorted(set(rounded.tolist()), reverse=True):
+        selected = nonzero[rounded == value]
+        coords = [tuple(int(c) for c in np.unravel_index(i, arr.shape)) for i in selected]
+        groups.append((float(value), coords))
+    return groups
+
+
+def format_coefficient_groups(
+    coeffs: np.ndarray,
+    *,
+    coord_label=_default_pbxy_label,
+    precision: int = 4,
+    atol: float = 1e-9,
+    indent: str = "    ",
+) -> str:
+    """Render an inequality's coefficients grouped by distinct value.
+
+    One block per distinct coefficient value (descending), listing the
+    ``P(b|x,y)`` terms that share it -- far more readable than a dense array
+    for sparse/degenerate witnesses.
+    """
+    groups = coefficient_value_groups(coeffs, atol=atol, decimals=precision)
+    if not groups:
+        return f"{indent}(all coefficients zero)"
+    lines = []
+    for value, coords in groups:
+        terms = ", ".join(coord_label(c) for c in coords)
+        lines.append(f"{indent}{format(value, f'+.{precision}g')} * [ {terms} ]")
+    return "\n".join(lines)
+
+
 def solve_cvxpy_problem_preserving_duals(
     problem: cp.Problem,
     solve_kwargs: dict[str, object],
