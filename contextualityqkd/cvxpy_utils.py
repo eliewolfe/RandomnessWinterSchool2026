@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from typing import Hashable, NamedTuple
+from collections.abc import Sequence
+from typing import Hashable
 
 import cvxpy as cp
 import numpy as np
@@ -11,75 +12,104 @@ import numpy as np
 DualKey = tuple[Hashable, ...]
 
 
-class DualRef(NamedTuple):
-    """A pointer to one semantic constraint's dual value.
-
-    ``constraint`` is the CVXPY constraint carrying the dual. ``row`` is
-    ``None`` when the whole constraint maps to a single key (a scalar
-    constraint, or a vector constraint whose dual we expose intact), and an
-    integer when the key addresses a single row of a stacked matrix
-    constraint ``A @ x (==|>=) b`` -- letting many original scalar constraints
-    share one CVXPY constraint object while keeping per-row duals addressable.
-    """
-
-    constraint: cp.Constraint
-    row: int | None
-
-
 def add_named_constraint(
     *,
     key: DualKey,
     constraint: cp.Constraint,
     constraints: list[cp.Constraint],
-    dual_constraints: dict[DualKey, DualRef],
+    dual_constraints: dict[DualKey, cp.Constraint],
 ) -> None:
-    """Append a CVXPY constraint and keep a stable handle for dual inspection."""
+    """Append a CVXPY constraint and keep a stable handle for dual inspection.
+
+    Used by the SDP backend, where each semantic key maps to one constraint and
+    the dual is exposed intact (see :class:`NamedDuals` for the array-valued
+    style the LP backend uses).
+    """
     if key in dual_constraints:
         raise RuntimeError(f"Duplicate CVXPY dual constraint key: {key!r}")
     constraints.append(constraint)
-    dual_constraints[key] = DualRef(constraint, None)
-
-
-def register_matrix_constraint(
-    *,
-    name: str,
-    constraint: cp.Constraint,
-    row_keys: list[DualKey],
-    constraints: list[cp.Constraint],
-    dual_constraints: dict[DualKey, DualRef],
-) -> None:
-    """Append one stacked matrix constraint and map each row to a dual key.
-
-    ``constraint`` is a single CVXPY constraint of the form ``A @ x (==|>=) b``
-    whose ``i``-th row replaces what used to be an individual scalar
-    constraint. ``row_keys[i]`` is the semantic key for that row, so dual
-    inspection stays addressable per original ``(x, y, b, ...)`` tuple even
-    though CVXPY now sees a single, trivially-canonicalized block.
-    """
-    if constraint.shape != (len(row_keys),):
-        raise ValueError(
-            f"Matrix constraint {name!r} has shape {constraint.shape} but "
-            f"{len(row_keys)} row keys were supplied."
-        )
-    constraints.append(constraint)
-    for row, key in enumerate(row_keys):
-        if key in dual_constraints:
-            raise RuntimeError(f"Duplicate CVXPY dual constraint key: {key!r}")
-        dual_constraints[key] = DualRef(constraint, row)
+    dual_constraints[key] = constraint
 
 
 def snapshot_dual_values(
-    dual_constraints: dict[DualKey, DualRef],
+    dual_constraints: dict[DualKey, cp.Constraint],
 ) -> dict[DualKey, object | None]:
     """Capture currently available CVXPY dual values by semantic constraint key."""
-    out: dict[DualKey, object | None] = {}
-    for key, ref in dual_constraints.items():
-        dual_value = ref.constraint.dual_value
-        if ref.row is None or dual_value is None:
-            out[key] = dual_value
-        else:
-            out[key] = float(np.asarray(dual_value).reshape(-1)[ref.row])
-    return out
+    return {key: constraint.dual_value for key, constraint in dual_constraints.items()}
+
+
+class NamedDuals:
+    """Collect CVXPY constraints under physical names and report array duals.
+
+    Each named group's dual is returned as a single numpy array whose axes are
+    that constraint's natural physical indices, so callers slice
+    ``duals["observed_bob"][x, y, b]`` instead of looking up a flat tuple key.
+    CVXPY already returns ``constraint.dual_value`` shaped like the constraint,
+    so there is nothing to map.
+
+    Three registration styles:
+
+    * :meth:`add` -- one constraint reported as its own shaped dual array.
+    * :meth:`add_group` -- a list of like-shaped constraints whose duals are
+      stacked along a new leading axis (e.g. one row per operational equivalence).
+    * :meth:`add_masked` -- a constraint over masked cells whose 1-D dual is
+      scattered back into the full ``mask.shape`` array, ``NaN`` off the mask so
+      "never constrained" is distinguishable from a genuine zero multiplier.
+    """
+
+    def __init__(self) -> None:
+        self._single: dict[str, cp.Constraint] = {}
+        self._groups: dict[str, list[cp.Constraint]] = {}
+        self._masked: dict[str, tuple[cp.Constraint, np.ndarray]] = {}
+
+    def add(self, name: str, constraint: cp.Constraint) -> cp.Constraint:
+        self._claim(name)
+        self._single[name] = constraint
+        return constraint
+
+    def add_group(self, name: str, group: Sequence[cp.Constraint]) -> None:
+        self._claim(name)
+        self._groups[name] = list(group)
+
+    def add_masked(self, name: str, constraint: cp.Constraint, mask: np.ndarray) -> cp.Constraint:
+        self._claim(name)
+        self._masked[name] = (constraint, np.asarray(mask, dtype=bool))
+        return constraint
+
+    @property
+    def constraints(self) -> list[cp.Constraint]:
+        """Every registered constraint, ready to hand to ``cp.Problem``."""
+        return (
+            list(self._single.values())
+            + [c for group in self._groups.values() for c in group]
+            + [c for c, _ in self._masked.values()]
+        )
+
+    def snapshot(self) -> dict[str, np.ndarray | None]:
+        """Capture the current dual of every group as a physically-indexed array."""
+        out: dict[str, np.ndarray | None] = {}
+        for name, constraint in self._single.items():
+            dual = constraint.dual_value
+            out[name] = None if dual is None else np.asarray(dual, dtype=float)
+        for name, group in self._groups.items():
+            duals = [c.dual_value for c in group]
+            if not group or any(d is None for d in duals):
+                out[name] = None
+            else:
+                out[name] = np.stack([np.asarray(d, dtype=float) for d in duals], axis=0)
+        for name, (constraint, mask) in self._masked.items():
+            dual = constraint.dual_value
+            if dual is None:
+                out[name] = None
+            else:
+                full = np.full(mask.shape, np.nan, dtype=float)
+                full[mask] = np.asarray(dual, dtype=float).reshape(-1)
+                out[name] = full
+        return out
+
+    def _claim(self, name: str) -> None:
+        if name in self._single or name in self._groups or name in self._masked:
+            raise RuntimeError(f"Duplicate dual group name: {name!r}")
 
 
 def assert_cvxpy_solution_is_optimal(

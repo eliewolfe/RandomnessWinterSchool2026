@@ -35,10 +35,13 @@ class ProtocolLPTests(unittest.TestCase):
         self.assertIsNotNone(solver.cvxpy_problem)
         self.assertNotIn(0, solver.cvxpy_problems_by_y)
         self.assertIn(1, solver.cvxpy_problems_by_y)
-        self.assertIn(("probability_nonnegative",), solver.dual_constraints)
-        self.assertIn(("observed_bob", 0, 1, 0), solver.dual_constraints)
         self.assertIn(1, solver.dual_values_by_y)
-        self.assertIn(("probability_nonnegative",), solver.dual_values_by_y[1])
+
+        # Duals are array-valued, indexed by their natural physical axes.
+        duals = solver.dual_values_by_y[1]
+        self.assertEqual(duals["probability_nonnegative"].shape, (2, 2, 2, 2))
+        self.assertEqual(duals["observed_bob"].shape, (2, 2, 2))
+        self.assertTrue(np.isfinite(duals["observed_bob"][0, 1, 0]))
         self.assertIsNotNone(solver.solution_probabilities)
 
     def test_qkd_noncontextual_lp_is_package_exported(self) -> None:
