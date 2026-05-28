@@ -27,6 +27,7 @@ fast without sacrificing readability:
 
 from __future__ import annotations
 
+from functools import cached_property
 from typing import Literal, Sequence
 
 import cvxpy as cp
@@ -82,6 +83,9 @@ class QKDNoncontextualLP:
         self.cvxpy_problems_by_y: dict[int, cp.Problem] = {}
         self.duals = NamedDuals()
         self.dual_values_by_y: dict[int, dict[str, np.ndarray | None]] = {}
+        # Filled per-y inside solve_lp(): c_y(x,y',b) >= 0 such that
+        # P_guess(y) <= sum_{x,y',b} c_y(x,y',b) P(b|x,y'), tight at the data.
+        self.guess_bound_coeffs_by_y: dict[int, np.ndarray] = {}
         self.eve_guess_by_y: np.ndarray | None = None
         self.solution_probabilities: np.ndarray | None = None
 
@@ -104,8 +108,6 @@ class QKDNoncontextualLP:
 
         self._build_problem()
         out = np.full((self.num_y,), np.nan, dtype=float)
-        self.cvxpy_problems_by_y = {}
-        self.dual_values_by_y = {}
 
         problem = self.cvxpy_problem
         assert problem is not None and self.objective_coeffs is not None
@@ -123,6 +125,12 @@ class QKDNoncontextualLP:
             out[y] = float(value)
             self.cvxpy_problems_by_y[y] = problem
             self.dual_values_by_y[y] = self.duals.snapshot()
+            coeffs = self.dual_values_by_y[y].get("marginal_consistency")
+            if coeffs is None:
+                raise RuntimeError(
+                    f"Missing marginal_consistency dual for y={y}; cannot form the guessing bound."
+                )
+            self.guess_bound_coeffs_by_y[y] = np.asarray(coeffs, dtype=float)
             self._verify_guess_bound_tight(y, out[y])
 
         self.eve_guess_by_y = out
@@ -132,16 +140,14 @@ class QKDNoncontextualLP:
     def _verify_guess_bound_tight(self, y: int, primal_value: float) -> None:
         """Assert the dual witness reproduces the primal guessing probability.
 
-        The only nonzero-rhs constraint is ``observed_bob`` (rhs = data), so by
+        The only nonzero-rhs constraint is ``marginal_consistency`` (rhs = data), so by
         strong duality ``<c_y, data>`` must equal the primal optimum ``G(y)``.
         This guards the inequality ``P_guess(y) <= <c_y, P(b|x,y)>`` against any
         solver-dependent dual sign/convention surprise.
         """
-        coeffs = self.dual_values_by_y[y].get("observed_bob")
-        if coeffs is None:
-            raise RuntimeError(f"Missing observed_bob dual for y={y}; cannot form the guessing bound.")
+        coeffs = self.guess_bound_coeffs_by_y[y]
         data = np.asarray(self.scenario.data_numeric, dtype=float)
-        bound = float(np.sum(np.asarray(coeffs, dtype=float) * data))
+        bound = float(np.sum(coeffs * data))
         tol = max(1e-6, 1e-5 * abs(primal_value))
         if not np.isfinite(bound) or abs(bound - primal_value) > tol:
             raise RuntimeError(
@@ -166,6 +172,7 @@ class QKDNoncontextualLP:
         self.cvxpy_problems_by_y = {}
         self.duals = NamedDuals()
         self.dual_values_by_y = {}
+        self.guess_bound_coeffs_by_y = {}
         self.objective_vectors_by_y = {}
         self.solution_probabilities = None
 
@@ -194,7 +201,7 @@ class QKDNoncontextualLP:
         self.duals.add("probability_nonnegative", P >= 0.0)
 
         # Data consistency: sum_e P[x, y, b, e] = p_data(b | x, y).
-        self.duals.add("observed_bob", cp.sum(P, axis=3) == data)
+        self.duals.add("marginal_consistency", cp.sum(P, axis=3) <= data)
 
         # Preparation equivalence m: sum_x c[x] P[x, y, b, e] = 0 for every (y, b, e).
         # Broadcast c over (y, b, e), then contract the preparation axis 0.
@@ -213,10 +220,11 @@ class QKDNoncontextualLP:
             )
 
         # Invalid guesses: force zero mass on e >= b_count(y). One masked constraint.
-        mask = self._invalid_guess_mask()
+        mask = self._invalid_guess_mask
         if mask.any():
             self.duals.add_masked("invalid_guess", P[mask] == 0.0, mask)
 
+    @cached_property
     def _invalid_guess_mask(self) -> np.ndarray:
         """Boolean (num_x, num_y, num_b, num_e) mask of forced-zero guess labels."""
         mask = np.zeros(self.shape, dtype=bool)
@@ -256,20 +264,6 @@ class QKDNoncontextualLP:
             threads=self.threads,
             verbose=self.verbose >= 2,
         )
-
-    def guess_bound_coeffs_by_y(self) -> dict[int, np.ndarray]:
-        """Per-y witness coefficients c_y(x,y',b) for the guessing upper bound.
-
-        For each solved y, the dual of the data-consistency constraint gives a
-        linear upper bound on Eve's guessing probability in terms of the
-        observed marginals: ``P_guess(y) <= sum_{x,y',b} c_y(x,y',b) P(b|x,y')``,
-        tight at the observed data.
-        """
-        return {
-            y: np.asarray(snapshot["observed_bob"], dtype=float)
-            for y, snapshot in self.dual_values_by_y.items()
-            if snapshot.get("observed_bob") is not None
-        }
 
     def _extract_solution_probabilities(self) -> np.ndarray | None:
         if self.cvxpy_variable is None or self.cvxpy_variable.value is None:

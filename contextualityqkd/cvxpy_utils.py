@@ -43,7 +43,7 @@ class NamedDuals:
 
     Each named group's dual is returned as a single numpy array whose axes are
     that constraint's natural physical indices, so callers slice
-    ``duals["observed_bob"][x, y, b]`` instead of looking up a flat tuple key.
+    ``duals["marginal_consistency"][x, y, b]`` instead of looking up a flat tuple key.
     CVXPY already returns ``constraint.dual_value`` shaped like the constraint,
     so there is nothing to map.
 

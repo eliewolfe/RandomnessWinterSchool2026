@@ -832,7 +832,7 @@ class ContextualityProtocol:
         uniform mean over solved y (matching ``eve_guess_master_key_average_y_lp``)
         yields ``avg_y P_guess(y) <= <c, P(b|x,y)>``, tight at the observed data.
         """
-        per_y = self.eve_master_key_lp_solver.guess_bound_coeffs_by_y()
+        per_y = self.eve_master_key_lp_solver.guess_bound_coeffs_by_y
         shape = (
             self.scenario.X_cardinality,
             self.scenario.Y_cardinality,
@@ -849,24 +849,73 @@ class ContextualityProtocol:
         data = np.asarray(self.scenario.data_numeric, dtype=float)
         return float(np.sum(coeffs * data))
 
-    def format_eve_guess_upper_bound_inequality(self, *, precision: int = 4) -> str:
-        """Render the aggregated linear upper bound on Eve's average guess prob."""
+    def _format_guess_bound_inequality_section(
+        self,
+        *,
+        coeffs: np.ndarray,
+        bound: float,
+        lhs_expression: str,
+        title: str,
+        precision: int,
+    ) -> str:
+        """Render one ``LHS <= sum c(x,y,b) P(b|x,y) = bound`` block with grouped coefficients."""
         from .cvxpy_utils import format_coefficient_groups
 
-        coeffs = self.eve_guess_master_key_upper_bound_coeffs
-        bound = self.eve_guess_master_key_upper_bound_value
         header = (
-            f"Eve average guessing-probability upper bound (held by {self.master_key_holder}, LP dual):\n"
-            f"  avg_y P_E^guess(master_key|y)  <=  sum_xyb c(x,y,b) P(b|x,y)  =  "
+            f"{title} (held by {self.master_key_holder}, LP dual):\n"
+            f"  {lhs_expression}  <=  sum_xyb c(x,y,b) P(b|x,y)  =  "
             f"{ContextualityScenario.format_numeric(bound, precision=precision)}\n"
             f"  coefficients c:"
         )
         return header + "\n" + format_coefficient_groups(coeffs, precision=precision, indent="    ")
 
+    def format_eve_guess_upper_bound_inequality(self, *, precision: int = 4) -> str:
+        """Render the aggregated linear upper bound on Eve's average guess prob."""
+        return self._format_guess_bound_inequality_section(
+            coeffs=self.eve_guess_master_key_upper_bound_coeffs,
+            bound=self.eve_guess_master_key_upper_bound_value,
+            lhs_expression="avg_y P_E^guess(master_key|y)",
+            title="Eve average guessing-probability upper bound",
+            precision=precision,
+        )
+
     def print_eve_guess_upper_bound_inequality(self, *, precision: int = 4, leading_newline: bool = True) -> None:
         """Print the aggregated linear upper bound on Eve's average guessing probability."""
         prefix = "\n" if leading_newline else ""
         print(prefix + self.format_eve_guess_upper_bound_inequality(precision=precision))
+
+    def format_eve_guess_upper_bound_inequality_by_y(self, *, precision: int = 4) -> str:
+        """Render one linear upper-bound inequality per solved Bob setting ``y``.
+
+        Each section is the per-y analog of
+        :meth:`format_eve_guess_upper_bound_inequality`, built from that y's LP
+        dual ``c_y(x,y',b) >= 0`` so the inequality
+        ``P_E^guess(master_key|y) <= sum_{x,y',b} c_y(x,y',b) P(b|x,y')`` is tight
+        at the observed data.
+        """
+        per_y = self.eve_master_key_lp_solver.guess_bound_coeffs_by_y
+        guesses = self.eve_guess_master_key_by_y_lp
+        sections = [
+            self._format_guess_bound_inequality_section(
+                coeffs=per_y[y],
+                bound=float(guesses[y]),
+                lhs_expression=f"P_E^guess(master_key|y={y})",
+                title=f"Eve guessing-probability upper bound at y={y}",
+                precision=precision,
+            )
+            for y in sorted(per_y)
+        ]
+        return "\n\n".join(sections)
+
+    def print_eve_guess_upper_bound_inequality_by_y(
+        self,
+        *,
+        precision: int = 4,
+        leading_newline: bool = True,
+    ) -> None:
+        """Print the per-y linear upper-bound inequalities on Eve's guessing probability."""
+        prefix = "\n" if leading_newline else ""
+        print(prefix + self.format_eve_guess_upper_bound_inequality_by_y(precision=precision))
 
     @cached_property
     def eve_uncertainty_master_key_min_entropy_by_y_lp(self) -> np.ndarray:

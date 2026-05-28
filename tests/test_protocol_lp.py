@@ -40,8 +40,8 @@ class ProtocolLPTests(unittest.TestCase):
         # Duals are array-valued, indexed by their natural physical axes.
         duals = solver.dual_values_by_y[1]
         self.assertEqual(duals["probability_nonnegative"].shape, (2, 2, 2, 2))
-        self.assertEqual(duals["observed_bob"].shape, (2, 2, 2))
-        self.assertTrue(np.isfinite(duals["observed_bob"][0, 1, 0]))
+        self.assertEqual(duals["marginal_consistency"].shape, (2, 2, 2))
+        self.assertTrue(np.isfinite(duals["marginal_consistency"][0, 1, 0]))
         self.assertIsNotNone(solver.solution_probabilities)
 
     def test_qkd_noncontextual_lp_is_package_exported(self) -> None:
@@ -88,10 +88,11 @@ class ProtocolLPTests(unittest.TestCase):
         data_arr = np.asarray(scenario.data_numeric, dtype=float)
 
         # Per-y witness: <c_y, data> == G(y) (tight upper bound).
-        per_y = protocol.eve_master_key_lp_solver.guess_bound_coeffs_by_y()
+        per_y = protocol.eve_master_key_lp_solver.guess_bound_coeffs_by_y
         guesses = protocol.eve_guess_master_key_by_y_lp
         for y, coeffs in per_y.items():
             self.assertEqual(coeffs.shape, data_arr.shape)
+            self.assertTrue(np.all(coeffs >= -1e-9))  # nonneg dual from <= constraint
             self.assertAlmostEqual(float(np.sum(coeffs * data_arr)), float(guesses[y]), places=6)
 
         # Aggregated witness reproduces the average guessing probability.
