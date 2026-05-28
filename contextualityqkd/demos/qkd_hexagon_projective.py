@@ -35,7 +35,7 @@ def main() -> None:
         where_key=measurement_indices,
         master_key_holder="Bob",
         atol=1e-9,
-        lp_solver="highs",
+        lp_solver="mosek_simplex",
         sdp_solver="MOSEK",
         sdp_projective_bob=False,
         sdp_projective_eve=False,
@@ -49,20 +49,18 @@ def main() -> None:
 
     scenario.print_probabilities(as_p_b_given_x_y=True, precision=3, representation="symbolic")
     scenario.print_operational_equivalences(precision=3, representation="symbolic")
-    try:
-        scenario.print_contextuality_measures(metrics=["contextual_fraction"], precision=3, show_inequalities=True, backend_solver="highs")
-    except ImportError as exc:
-        print(f"\nContextuality measures skipped: {exc}")
+    scenario.print_contextuality_measures(metrics=["contextual_fraction"], precision=3, show_inequalities=True, backend_solver="mosek_simplex")
     protocol.print_alice_guessing_metrics()
     protocol.print_alice_uncertainty_metrics()
     protocol.print_eve_security_metrics(
-        method="both",
+        method="lp",
         rate_type="reverse_fano",
         include_per_y_lp=False,
         precision_vector=3,
         precision_scalar=6,
         leading_newline=True,
     )
+    protocol.print_eve_guess_upper_bound_inequality_by_y()
     protocol.print_eve_guess_upper_bound_inequality()
 
     # auto_protocol = ContextualityProtocol(

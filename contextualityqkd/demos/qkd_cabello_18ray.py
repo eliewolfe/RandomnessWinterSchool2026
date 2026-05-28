@@ -85,10 +85,7 @@ def main() -> None:
 
     scenario.print_probabilities(as_p_b_given_x_y=True, precision=3, representation="symbolic")
     scenario.print_operational_equivalences(precision=3, representation="symbolic")
-    try:
-        scenario.print_contextuality_measures(metrics=["contextual_fraction"], precision=3, show_inequalities=True, backend_solver="highs")
-    except ImportError as exc:
-        print(f"\nContextuality measures skipped: {exc}")
+    scenario.print_contextuality_measures(metrics=["contextual_fraction"], precision=3, show_inequalities=True, backend_solver="mosek_simplex")
     protocol.print_alice_guessing_metrics()
     protocol.print_alice_uncertainty_metrics()
     protocol.print_eve_security_metrics(
@@ -99,6 +96,7 @@ def main() -> None:
         precision_scalar=6,
         leading_newline=True,
     )
+    protocol.print_eve_guess_upper_bound_inequality_by_y()
     protocol.print_eve_guess_upper_bound_inequality()
 
     # auto_protocol = ContextualityProtocol(

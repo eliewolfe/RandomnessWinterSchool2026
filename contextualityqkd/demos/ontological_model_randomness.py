@@ -68,4 +68,5 @@ protocol.print_eve_security_metrics(
     precision_scalar=6,
     leading_newline=True,
 )
+protocol.print_eve_guess_upper_bound_inequality_by_y()
 protocol.print_eve_guess_upper_bound_inequality()

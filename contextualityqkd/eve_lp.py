@@ -38,6 +38,7 @@ from .cvxpy_utils import (
     assert_cvxpy_solution_is_optimal,
     build_solve_kwargs,
     resolve_backend_solver,
+    uses_gurobi_simplex,
     uses_mosek_simplex,
 )
 from .scenario import ContextualityScenario
@@ -71,6 +72,7 @@ class QKDNoncontextualLP:
         self.backend_solver = str(backend_solver).strip().lower()
         self.solver = resolve_backend_solver(self.backend_solver)
         self._mosek_simplex = uses_mosek_simplex(self.backend_solver)
+        self._gurobi_simplex = uses_gurobi_simplex(self.backend_solver)
         self.threads = None if threads is None else int(threads)
         self.atol = scenario.atol if atol is None else float(atol)
         self.verbose = int(verbose)
@@ -105,6 +107,7 @@ class QKDNoncontextualLP:
             self.backend_solver = str(backend_solver).strip().lower()
             self.solver = resolve_backend_solver(self.backend_solver)
             self._mosek_simplex = uses_mosek_simplex(self.backend_solver)
+            self._gurobi_simplex = uses_gurobi_simplex(self.backend_solver)
 
         self._build_problem()
         out = np.full((self.num_y,), np.nan, dtype=float)
@@ -261,6 +264,7 @@ class QKDNoncontextualLP:
         return build_solve_kwargs(
             self.solver,
             mosek_simplex=self._mosek_simplex,
+            gurobi_simplex=self._gurobi_simplex,
             threads=self.threads,
             verbose=self.verbose >= 2,
         )

@@ -281,7 +281,7 @@ class ContextualityScenario:
         *,
         precision: int = 3,
         show_inequalities: bool = True,
-        backend_solver: str = "highs",
+        backend_solver: str = "mosek_simplex",
     ) -> None:
         """Print selected contextuality measures, optionally with dual witnesses."""
         metric_list = ["contextual_fraction"] if metrics is None else list(metrics)

@@ -132,10 +132,17 @@ def is_mosek_solver(solver: object) -> bool:
     return str(solver).upper() == str(cp.MOSEK).upper()
 
 
+def is_gurobi_solver(solver: object) -> bool:
+    """Return whether a CVXPY solver token denotes Gurobi."""
+    return str(solver).upper() == str(cp.GUROBI).upper()
+
+
 _BACKEND_SOLVERS = {
-    "mosek": cp.MOSEK,          # interior-point: dense but symmetric dual
-    "mosek_simplex": cp.MOSEK,  # dual simplex (+ bfs): sparse vertex dual
-    "highs": cp.HIGHS,          # simplex: sparse vertex dual
+    "mosek": cp.MOSEK,            # interior-point: dense but symmetric dual
+    "mosek_simplex": cp.MOSEK,    # dual simplex (+ bfs): sparse vertex dual
+    "gurobi": cp.GUROBI,          # automatic (typically barrier + crossover)
+    "gurobi_simplex": cp.GUROBI,  # dual simplex: sparse vertex dual
+    "highs": cp.HIGHS,            # simplex: sparse vertex dual
     "simplex": cp.HIGHS,
     "clarabel": cp.CLARABEL,
     "scipy": cp.SCIPY,
@@ -158,10 +165,16 @@ def uses_mosek_simplex(backend_solver: str) -> bool:
     return str(backend_solver).strip().lower() == "mosek_simplex"
 
 
+def uses_gurobi_simplex(backend_solver: str) -> bool:
+    """Whether a backend name requests Gurobi's dual-simplex optimizer."""
+    return str(backend_solver).strip().lower() == "gurobi_simplex"
+
+
 def build_solve_kwargs(
     solver: str,
     *,
     mosek_simplex: bool = False,
+    gurobi_simplex: bool = False,
     threads: int | None = None,
     verbose: bool = False,
 ) -> dict[str, object]:
@@ -169,7 +182,8 @@ def build_solve_kwargs(
 
     For MOSEK simplex we set the dual-simplex optimizer and ``bfs=True`` so
     CVXPY reads MOSEK's basic (vertex) solution, which yields a sparse dual
-    witness.
+    witness. For Gurobi simplex we set ``Method=1`` (dual simplex); a simplex
+    optimum is naturally a basic vertex so no extra flag is needed.
     """
     # These backends model with N-dimensional (>2-D) array variables, which the
     # C++ canonicalization backend does not support; choose the SCIPY backend
@@ -188,6 +202,12 @@ def build_solve_kwargs(
             mosek_params["MSK_IPAR_NUM_THREADS"] = int(threads)
     if mosek_params:
         solve_kwargs["mosek_params"] = mosek_params
+    if is_gurobi_solver(solver):
+        # CVXPY forwards unrecognized kwargs to Gurobi as named parameters.
+        if gurobi_simplex:
+            solve_kwargs["Method"] = 1  # dual simplex; vertex (basic) solution
+        if threads is not None and threads > 0:
+            solve_kwargs["Threads"] = int(threads)
     return solve_kwargs
 
 

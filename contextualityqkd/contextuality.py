@@ -29,6 +29,7 @@ from .cvxpy_utils import (
     assert_cvxpy_solution_is_optimal,
     build_solve_kwargs,
     resolve_backend_solver,
+    uses_gurobi_simplex,
     uses_mosek_simplex,
 )
 from .linalg_utils import enumerate_cone_extremal_rays, select_linearly_independent_rows
@@ -69,6 +70,7 @@ class NoncontextualityAssessment:
         self.backend_solver = str(backend_solver).strip().lower()
         self.solver = resolve_backend_solver(self.backend_solver)
         self._mosek_simplex = uses_mosek_simplex(self.backend_solver)
+        self._gurobi_simplex = uses_gurobi_simplex(self.backend_solver)
         self.threads = None if threads is None else int(threads)
         self.verbose = int(verbose)
         self.requested_monotones = self._normalize_monotone(monotone)
@@ -298,6 +300,7 @@ class NoncontextualityAssessment:
         return build_solve_kwargs(
             self.solver,
             mosek_simplex=self._mosek_simplex,
+            gurobi_simplex=self._gurobi_simplex,
             threads=self.threads,
             verbose=self.verbose >= 2,
         )

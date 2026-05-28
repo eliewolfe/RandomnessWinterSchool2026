@@ -158,10 +158,7 @@ def main() -> None:
 
     print("\nOperational equivalences:")
     scenario.print_operational_equivalences(precision=3, representation="symbolic")
-    try:
-        scenario.print_contextuality_measures(metrics=["contextual_fraction"], precision=3, show_inequalities=True, backend_solver="highs")
-    except ImportError as exc:
-        print(f"\nContextuality measures skipped: {exc}")
+    scenario.print_contextuality_measures(metrics=["contextual_fraction"], precision=3, show_inequalities=True, backend_solver="mosek_simplex")
     _print_porac_article_prep_opeqs()
     rank_article, rank_discovered, rank_stacked = _validate_porac_prep_opeq_subspace(scenario)
     print(
@@ -186,6 +183,7 @@ def main() -> None:
         precision_scalar=6,
         leading_newline=True,
     )
+    protocol.print_eve_guess_upper_bound_inequality_by_y()
     protocol.print_eve_guess_upper_bound_inequality()
 
     # auto_protocol = ContextualityProtocol(
