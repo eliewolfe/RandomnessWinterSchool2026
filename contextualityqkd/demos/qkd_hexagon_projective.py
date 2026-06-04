@@ -23,8 +23,7 @@ from contextualityqkd.scenario import ContextualityScenario
 def main() -> None:
     np.set_printoptions(precision=6, suppress=True)
     ContextualityScenario.print_title("QKD Protocol: Hexagon projective measurements")
-
-    measurement_indices = [(0, 3), (1, 4), (2, 5)]
+    measurement_indices = [(0, 3), (2, 5), (4, 1)]
     scenario = GPTContextualityScenario.from_xz_ring(
         num_states=6,
         measurement_indices=measurement_indices,
@@ -33,7 +32,8 @@ def main() -> None:
     protocol = ContextualityProtocol(
         scenario=scenario,
         where_key=measurement_indices,
-        master_key_holder="Bob",
+        # where_key=None,
+        master_key_holder="Alice",
         atol=1e-9,
         lp_solver="mosek_simplex",
         sdp_solver="MOSEK",

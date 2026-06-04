@@ -56,6 +56,7 @@ class ContextualityProtocol:
         lp_solver: str = "mosek_simplex",
         lp_threads: int | None = None,
         lp_verbose: int | bool = 0,
+        qp_solver: str = "gurobi",
     ) -> None:
         if not isinstance(scenario, ContextualityScenario):
             raise TypeError("scenario must be a ContextualityScenario instance.")
@@ -76,6 +77,7 @@ class ContextualityProtocol:
         self.lp_solver = str(lp_solver)
         self.lp_threads = None if lp_threads is None else int(lp_threads)
         self.lp_verbose = int(lp_verbose)
+        self.qp_solver = str(qp_solver)
 
         if isinstance(where_key, str):
             token = where_key.strip().lower()
@@ -729,6 +731,7 @@ class ContextualityProtocol:
             where_key=self.where_key,
             threads=self.lp_threads,
             backend_solver=self.lp_solver,
+            qp_solver=self.qp_solver,
             atol=self.atol,
             verbose=self.lp_verbose,
         )
@@ -755,6 +758,7 @@ class ContextualityProtocol:
             where_key=self.where_key,
             threads=self.lp_threads,
             backend_solver=self.lp_solver,
+            qp_solver=self.qp_solver,
             atol=self.atol,
             verbose=self.lp_verbose,
         )

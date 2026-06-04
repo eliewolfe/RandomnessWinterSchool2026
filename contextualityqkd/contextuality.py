@@ -57,6 +57,7 @@ class NoncontextualityAssessment:
         dephasing_target: np.ndarray | None = None,
         atol: float | None = None,
         backend_solver: str = "highs",
+        qp_solver: str = "gurobi",
         threads: int | None = None,
         verbose: int | bool = 0,
     ) -> None:
@@ -71,11 +72,17 @@ class NoncontextualityAssessment:
         self.solver = resolve_backend_solver(self.backend_solver)
         self._mosek_simplex = uses_mosek_simplex(self.backend_solver)
         self._gurobi_simplex = uses_gurobi_simplex(self.backend_solver)
+        self.qp_solver = str(qp_solver).strip().lower()
         self.threads = None if threads is None else int(threads)
         self.verbose = int(verbose)
         self.requested_monotones = self._normalize_monotone(monotone)
         self._dephasing_target_arg = dephasing_target
+        # _solved: primal-side info per monotone (measure, weights, subbehavior,
+        # raw LP dual snapshot, primal_value). _refined: witness-side info per
+        # monotone built lazily by _ensure_refined (alpha, bound, sense,
+        # violation, dual_values with QP-refined witness duals).
         self._solved: dict[Monotone, dict[str, object]] = {}
+        self._refined: dict[Monotone, dict[str, object]] = {}
 
     def solve(self) -> "NoncontextualityAssessment":
         """Eagerly solve every requested monotone; return self for chaining."""
@@ -131,30 +138,43 @@ class NoncontextualityAssessment:
 
     @cached_property
     def dual_values(self) -> dict[Monotone, dict[str, np.ndarray | None]]:
-        """Array-valued constraint duals per requested monotone."""
-        return {m: self._ensure_solved(m)["duals"] for m in self.requested_monotones}
+        """QP-refined constraint duals per requested monotone.
 
-    # ----- dual noncontextuality-inequality witnesses -----
+        Witness-relevant duals (``subbehavior_le_data``+``uniform_mass`` for
+        contextual fraction; ``dephased_behavior`` for dephasing robustness)
+        are the minimum-norm point on the optimal dual face. Auxiliary duals
+        not in the QP objective (the implicit ``lambda <= 1`` multiplier) are
+        not surfaced here. For the raw LP-side snapshot, see
+        :attr:`raw_dual_values`.
+        """
+        return {m: self._ensure_refined(m)["dual_values"] for m in self.requested_monotones}
+
+    @cached_property
+    def raw_dual_values(self) -> dict[Monotone, dict[str, np.ndarray | None]]:
+        """Raw LP-side constraint duals per requested monotone, before QP refinement."""
+        return {m: self._ensure_solved(m)["raw_duals"] for m in self.requested_monotones}
+
+    # ----- dual noncontextuality-inequality witnesses (all QP-refined) -----
 
     @cached_property
     def inequality(self) -> dict[Monotone, np.ndarray]:
         """Witness functional ``alpha(x, y, b)`` (shape of ``P``) per monotone."""
-        return {m: self._ensure_solved(m)["alpha"] for m in self.requested_monotones}
+        return {m: self._ensure_refined(m)["alpha"] for m in self.requested_monotones}
 
     @cached_property
     def inequality_bound(self) -> dict[Monotone, float]:
         """Noncontextual bound ``beta`` per monotone (``<alpha, N> sense beta``)."""
-        return {m: float(self._ensure_solved(m)["bound"]) for m in self.requested_monotones}
+        return {m: float(self._ensure_refined(m)["bound"]) for m in self.requested_monotones}
 
     @cached_property
     def inequality_sense(self) -> dict[Monotone, str]:
         """Sense ``"<="`` or ``">="`` satisfied by all noncontextual behaviors."""
-        return {m: str(self._ensure_solved(m)["sense"]) for m in self.requested_monotones}
+        return {m: str(self._ensure_refined(m)["sense"]) for m in self.requested_monotones}
 
     @cached_property
     def violation(self) -> dict[Monotone, float]:
         """Signed amount the observed data breaks the inequality (== measure)."""
-        return {m: float(self._ensure_solved(m)["violation"]) for m in self.requested_monotones}
+        return {m: float(self._ensure_refined(m)["violation"]) for m in self.requested_monotones}
 
     # ----- shared model scaffolding -----
 
@@ -206,6 +226,7 @@ class NoncontextualityAssessment:
         return {"problem": problem, "duals": duals}
 
     def _ensure_solved(self, monotone: Monotone) -> dict[str, object]:
+        """Solve the LP for ``monotone`` once; cache only primal-side quantities."""
         monotone = self._canonical_monotone(monotone)
         if monotone in self._solved:
             return self._solved[monotone]
@@ -223,58 +244,85 @@ class NoncontextualityAssessment:
         value = float(problem.solve(**self._solve_kwargs()))
         assert_cvxpy_solution_is_optimal(problem=problem, value=value, problem_kind=f"{monotone} LP")
 
-        dual_arrays = duals.snapshot()
-        solution = self._extract(monotone, value=float(value), dual_arrays=dual_arrays)
-        self._solved[monotone] = solution
-        return solution
-
-    def _extract(
-        self,
-        monotone: Monotone,
-        *,
-        value: float,
-        dual_arrays: dict[str, np.ndarray | None],
-    ) -> dict[str, object]:
-        data = np.asarray(self.scenario.data_numeric, dtype=float)
         weights = np.asarray(self._weights.value, dtype=float)
         subbehavior = np.asarray(self._subbehavior_expr.value, dtype=float)
+        raw_duals = duals.snapshot()
 
         if monotone == "contextual_fraction":
             noncontextual = self._validated_noncontextual_fraction(value)
             measure = 1.0 - noncontextual
-            # Witness functional c = -(mu + nu): mu the dual of S <= P, nu the
-            # dual of the uniform-mass equality (broadcast over b). Every
-            # noncontextual cone behavior N satisfies <c, N> <= 0, while
-            # <c, P> = 1 - lambda* = contextual_fraction > 0 violates it.
-            mu = np.asarray(dual_arrays["subbehavior_le_data"], dtype=float)
-            nu = np.asarray(dual_arrays["uniform_mass"], dtype=float)
-            alpha = -(mu + nu[:, :, None])
-            bound = 0.0
-            sense = "<="
-            violation = float(np.sum(alpha * data)) - bound
-            extra = {"noncontextual_fraction": noncontextual}
+            extra: dict[str, object] = {"noncontextual_fraction": float(noncontextual)}
         else:
             measure = float(value)  # r*
-            # Witness: y (dual of the behavior equality) gives <y, N> <= 0 for all
-            # noncontextual N, while <y, P> = r* (= measure). CVXPY returns the
-            # equality dual with the opposite sign to this orientation, so negate.
-            alpha = -np.asarray(dual_arrays["dephased_behavior"], dtype=float)
-            bound = 0.0
-            sense = "<="
-            violation = float(np.sum(alpha * data)) - bound
             extra = {}
 
-        return {
+        solution: dict[str, object] = {
             "measure": float(measure),
             "weights": weights,
             "subbehavior": subbehavior,
-            "duals": dual_arrays,
-            "alpha": alpha,
+            "raw_duals": raw_duals,
+            "primal_value": float(value),
+            **extra,
+        }
+        self._solved[monotone] = solution
+        return solution
+
+    def _ensure_refined(self, monotone: Monotone) -> dict[str, object]:
+        """Run the L2 dual-refinement QP for ``monotone`` once; cache the witness."""
+        from .dual_refinement import (
+            build_dual_contextual_fraction,
+            build_dual_dephasing_robustness,
+        )
+
+        monotone = self._canonical_monotone(monotone)
+        if monotone in self._refined:
+            return self._refined[monotone]
+        primal = self._ensure_solved(monotone)
+        data = np.asarray(self.scenario.data_numeric, dtype=float)
+        primal_value = float(primal["primal_value"])  # type: ignore[arg-type]
+
+        if monotone == "contextual_fraction":
+            refined_duals = build_dual_contextual_fraction(
+                data=data,
+                prep_extremals=self.prep_extremals,
+                effect_extremals=self.effect_extremals,
+                primal_value=primal_value,
+                qp_solver=self.qp_solver,
+                threads=self.threads,
+                verbose=self.verbose >= 2,
+            )
+            mu = refined_duals["subbehavior_le_data"]
+            nu = refined_duals["uniform_mass"]
+            alpha = -(mu + nu[:, :, None])
+        else:
+            refined_duals = build_dual_dephasing_robustness(
+                data=data,
+                target=self._resolve_dephasing_target(),
+                prep_extremals=self.prep_extremals,
+                effect_extremals=self.effect_extremals,
+                primal_value=primal_value,
+                qp_solver=self.qp_solver,
+                threads=self.threads,
+                verbose=self.verbose >= 2,
+            )
+            # CVXPY's equality-constraint dual returns gamma = -alpha_witness;
+            # the QP keeps that convention so dual_values matches the LP-side
+            # sign and existing downstream sign flips stay correct.
+            alpha = -refined_duals["dephased_behavior"]
+
+        bound = 0.0
+        sense = "<="
+        violation = float(np.sum(alpha * data)) - bound
+
+        refined: dict[str, object] = {
+            "alpha": np.asarray(alpha, dtype=float),
             "bound": float(bound),
             "sense": sense,
             "violation": float(violation),
-            **extra,
+            "dual_values": refined_duals,
         }
+        self._refined[monotone] = refined
+        return refined
 
     def _validated_noncontextual_fraction(self, value: float) -> float:
         if not np.isfinite(value):

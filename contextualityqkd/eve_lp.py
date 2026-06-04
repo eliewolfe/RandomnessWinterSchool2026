@@ -41,6 +41,7 @@ from .cvxpy_utils import (
     uses_gurobi_simplex,
     uses_mosek_simplex,
 )
+from .dual_refinement import EveDualRefiner
 from .scenario import ContextualityScenario
 
 
@@ -54,6 +55,7 @@ class QKDNoncontextualLP:
         master_key_holder: Literal["Alice", "Bob"] | str = "Alice",
         where_key: Sequence[Sequence[int]] | None = None,
         backend_solver: str = "mosek_simplex",
+        qp_solver: str = "gurobi",
         threads: int | None = None,
         atol: float | None = None,
         verbose: int | bool = 0,
@@ -73,6 +75,7 @@ class QKDNoncontextualLP:
         self.solver = resolve_backend_solver(self.backend_solver)
         self._mosek_simplex = uses_mosek_simplex(self.backend_solver)
         self._gurobi_simplex = uses_gurobi_simplex(self.backend_solver)
+        self.qp_solver = str(qp_solver).strip().lower()
         self.threads = None if threads is None else int(threads)
         self.atol = scenario.atol if atol is None else float(atol)
         self.verbose = int(verbose)
@@ -84,10 +87,10 @@ class QKDNoncontextualLP:
         self.cvxpy_problem: cp.Problem | None = None
         self.cvxpy_problems_by_y: dict[int, cp.Problem] = {}
         self.duals = NamedDuals()
-        self.dual_values_by_y: dict[int, dict[str, np.ndarray | None]] = {}
-        # Filled per-y inside solve_lp(): c_y(x,y',b) >= 0 such that
-        # P_guess(y) <= sum_{x,y',b} c_y(x,y',b) P(b|x,y'), tight at the data.
-        self.guess_bound_coeffs_by_y: dict[int, np.ndarray] = {}
+        # Raw LP-side snapshots: kept private for diagnostics. Downstream
+        # consumers go through the QP-refined cached_property accessors below.
+        self._raw_dual_values_by_y: dict[int, dict[str, np.ndarray | None]] = {}
+        self._raw_guess_bound_coeffs_by_y: dict[int, np.ndarray] = {}
         self.eve_guess_by_y: np.ndarray | None = None
         self.solution_probabilities: np.ndarray | None = None
 
@@ -127,35 +130,36 @@ class QKDNoncontextualLP:
             assert_cvxpy_solution_is_optimal(problem=problem, value=value, problem_kind=f"LP for y={y}")
             out[y] = float(value)
             self.cvxpy_problems_by_y[y] = problem
-            self.dual_values_by_y[y] = self.duals.snapshot()
-            coeffs = self.dual_values_by_y[y].get("marginal_consistency")
-            if coeffs is None:
+            # Snapshot the raw LP dual for diagnostics; downstream witness
+            # consumers go through the QP-refined cached_property below.
+            self._raw_dual_values_by_y[y] = self.duals.snapshot()
+            raw_coeffs = self._raw_dual_values_by_y[y].get("marginal_consistency")
+            if raw_coeffs is None:
                 raise RuntimeError(
                     f"Missing marginal_consistency dual for y={y}; cannot form the guessing bound."
                 )
-            self.guess_bound_coeffs_by_y[y] = np.asarray(coeffs, dtype=float)
-            self._verify_guess_bound_tight(y, out[y])
+            self._raw_guess_bound_coeffs_by_y[y] = np.asarray(raw_coeffs, dtype=float)
 
         self.eve_guess_by_y = out
         self.solution_probabilities = self._extract_solution_probabilities()
         return out.copy()
 
-    def _verify_guess_bound_tight(self, y: int, primal_value: float) -> None:
-        """Assert the dual witness reproduces the primal guessing probability.
+    def _verify_guess_bound_tight(self, y: int, primal_value: float, coeffs: np.ndarray) -> None:
+        """Assert a witness dual reproduces the primal guessing probability.
 
         The only nonzero-rhs constraint is ``marginal_consistency`` (rhs = data), so by
         strong duality ``<c_y, data>`` must equal the primal optimum ``G(y)``.
-        This guards the inequality ``P_guess(y) <= <c_y, P(b|x,y)>`` against any
-        solver-dependent dual sign/convention surprise.
+        Called once per ``y`` after QP refinement; the QP enforces strong duality
+        as a hard equality constraint, so this acts as a solver-tolerance sanity
+        gate rather than a feasibility check.
         """
-        coeffs = self.guess_bound_coeffs_by_y[y]
         data = np.asarray(self.scenario.data_numeric, dtype=float)
         bound = float(np.sum(coeffs * data))
         tol = max(1e-6, 1e-5 * abs(primal_value))
         if not np.isfinite(bound) or abs(bound - primal_value) > tol:
             raise RuntimeError(
                 f"Eve guessing-bound dual inconsistency at y={y}: primal G={primal_value:.6g} "
-                f"but <c_y, data>={bound:.6g} (|diff| > {tol:.1e}). The dual witness is not tight."
+                f"but <c_y, data>={bound:.6g} (|diff| > {tol:.1e}). Refined witness is not tight."
             )
 
     def solve(
@@ -169,15 +173,78 @@ class QKDNoncontextualLP:
             where_key=where_key, master_key_holder=master_key_holder, backend_solver=backend_solver
         )
 
+    @cached_property
+    def _eve_dual_refiner(self) -> EveDualRefiner:
+        """Lazily build the per-y parameterized refinement QP for this scenario."""
+        return EveDualRefiner(
+            data=np.asarray(self.scenario.data_numeric, dtype=float),
+            prep_opeq=np.asarray(self.scenario.opeq_preps_numeric, dtype=float),
+            meas_opeq=np.asarray(self.scenario.opeq_meas_numeric, dtype=float),
+            invalid_guess_mask=self._invalid_guess_mask,
+            qp_solver=self.qp_solver,
+            threads=self.threads,
+            verbose=self.verbose >= 2,
+        )
+
+    @cached_property
+    def guess_bound_coeffs_by_y(self) -> dict[int, np.ndarray]:
+        """Per-y QP-refined witness coefficients c_y(x, y', b) for the guessing bound.
+
+        ``P_guess(y) <= sum_{x, y', b} c_y(x, y', b) P(b|x, y')`` is tight at the
+        observed data because the QP enforces strong duality as an equality.
+        First access solves one refinement QP per Bob setting that produced a
+        finite primal optimum; results are cached on the instance.
+        """
+        if self.eve_guess_by_y is None:
+            raise RuntimeError(
+                "QKDNoncontextualLP.solve_lp() must be called before reading refined duals."
+            )
+        refiner = self._eve_dual_refiner
+        out: dict[int, np.ndarray] = {}
+        for y, primal_value in enumerate(self.eve_guess_by_y):
+            if not np.isfinite(primal_value):
+                continue
+            refined = refiner.refine(
+                primal_value=float(primal_value),
+                obj_coeffs=self.objective_vectors_by_y[y],
+            )
+            self._verify_guess_bound_tight(y, float(primal_value), refined)
+            out[y] = refined
+        return out
+
+    @cached_property
+    def dual_values_by_y(self) -> dict[int, dict[str, np.ndarray | None]]:
+        """Per-y dict-of-dicts of named-constraint dual arrays.
+
+        The ``marginal_consistency`` entry is QP-refined (matching
+        :attr:`guess_bound_coeffs_by_y`); other named-group entries
+        (``probability_nonnegative``, ``prep_opeq``, ``measurement_opeq``,
+        ``invalid_guess``) are returned as the raw LP-side snapshot since they
+        do not flow into the printed witness inequality.
+        """
+        refined_witness = self.guess_bound_coeffs_by_y  # triggers QP refinement
+        out: dict[int, dict[str, np.ndarray | None]] = {}
+        for y, raw_snapshot in self._raw_dual_values_by_y.items():
+            merged = dict(raw_snapshot)
+            if y in refined_witness:
+                merged["marginal_consistency"] = refined_witness[y]
+            out[y] = merged
+        return out
+
     def _build_problem(self) -> None:
         self.cvxpy_variable = cp.Variable(self.shape, name="P")
         self.cvxpy_problem = None
         self.cvxpy_problems_by_y = {}
         self.duals = NamedDuals()
-        self.dual_values_by_y = {}
-        self.guess_bound_coeffs_by_y = {}
+        self._raw_dual_values_by_y = {}
+        self._raw_guess_bound_coeffs_by_y = {}
         self.objective_vectors_by_y = {}
         self.solution_probabilities = None
+        # Invalidate any previously cached refinement results; they will be
+        # recomputed lazily on the next access to the public dual properties.
+        vars(self).pop("dual_values_by_y", None)
+        vars(self).pop("guess_bound_coeffs_by_y", None)
+        vars(self).pop("_eve_dual_refiner", None)
 
         self._add_constraints()
         self.cvxpy_constraints = self.duals.constraints
