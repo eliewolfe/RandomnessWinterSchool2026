@@ -180,10 +180,11 @@ def build_solve_kwargs(
 ) -> dict[str, object]:
     """Assemble ``problem.solve`` kwargs shared by the LP backends.
 
-    For MOSEK simplex we set the dual-simplex optimizer and ``bfs=True`` so
+    For MOSEK simplex we set the primal-simplex optimizer and ``bfs=True`` so
     CVXPY reads MOSEK's basic (vertex) solution, which yields a sparse dual
-    witness. For Gurobi simplex we set ``Method=1`` (dual simplex); a simplex
-    optimum is naturally a basic vertex so no extra flag is needed.
+    witness. (Dual simplex mis-reports some degenerate ``<=`` LPs as infeasible;
+    see the inline note.) For Gurobi simplex we set ``Method=1`` (dual simplex);
+    a simplex optimum is naturally a basic vertex so no extra flag is needed.
     """
     # These backends model with N-dimensional (>2-D) array variables, which the
     # C++ canonicalization backend does not support; choose the SCIPY backend
@@ -196,7 +197,13 @@ def build_solve_kwargs(
     mosek_params: dict[str, object] = {}
     if is_mosek_solver(solver):
         if mosek_simplex:
-            mosek_params["MSK_IPAR_OPTIMIZER"] = "MSK_OPTIMIZER_DUAL_SIMPLEX"
+            # Primal, not dual, simplex: MOSEK's dual simplex spuriously reports
+            # the `<=`-form marginal-consistency LP as infeasible on degenerate
+            # scenarios (e.g. the Peres 24-ray set, where P=0 is plainly
+            # feasible yet dual simplex returns err_undef_solution at one
+            # setting). Primal simplex -- what the pre-CVXPY backend used -- is
+            # robust there and still returns a basic (vertex) solution for bfs.
+            mosek_params["MSK_IPAR_OPTIMIZER"] = "MSK_OPTIMIZER_PRIMAL_SIMPLEX"
             solve_kwargs["bfs"] = True
         if threads is not None and threads > 0:
             mosek_params["MSK_IPAR_NUM_THREADS"] = int(threads)
