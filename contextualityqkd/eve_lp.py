@@ -59,6 +59,10 @@ class QKDNoncontextualLP:
         threads: int | None = None,
         atol: float | None = None,
         verbose: int | bool = 0,
+        data_constraint: Literal["full", "witness"] = "full",
+        witness_coeffs: np.ndarray | None = None,
+        witness_bound: float | None = None,
+        witness_sense: Literal[">=", "<="] = ">=",
     ) -> None:
         if not isinstance(scenario, ContextualityScenario):
             raise TypeError("scenario must be a ContextualityScenario instance.")
@@ -79,6 +83,33 @@ class QKDNoncontextualLP:
         self.threads = None if threads is None else int(threads)
         self.atol = scenario.atol if atol is None else float(atol)
         self.verbose = int(verbose)
+
+        # Data-constraint mode. "full" pins Eve's Bob-marginal to the observed
+        # behavior entrywise; "witness" keeps only per-(x,y) normalization plus
+        # a single linear lower bound sum c[x,y,b] P(b|x,y) >= witness_bound --
+        # the analogue of certifying key from a Bell-inequality violation alone.
+        self.data_constraint = str(data_constraint).strip().lower()
+        if self.data_constraint not in {"full", "witness"}:
+            raise ValueError("data_constraint must be 'full' or 'witness'.")
+        if self.data_constraint == "witness":
+            if witness_coeffs is None or witness_bound is None:
+                raise ValueError("witness mode requires witness_coeffs and witness_bound.")
+            coeffs = np.asarray(witness_coeffs, dtype=float)
+            expected = (self.num_x, self.num_y, self.num_b)
+            if coeffs.shape != expected:
+                raise ValueError(f"witness_coeffs must have shape {expected}, got {coeffs.shape}.")
+            self.witness_coeffs: np.ndarray | None = coeffs
+            self.witness_bound: float | None = float(witness_bound)
+            sense = str(witness_sense).strip()
+            if sense not in {">=", "<="}:
+                raise ValueError("witness_sense must be '>=' or '<='.")
+            self.witness_sense: str = sense
+        else:
+            if witness_coeffs is not None or witness_bound is not None:
+                raise ValueError("witness_coeffs/witness_bound are only valid with data_constraint='witness'.")
+            self.witness_coeffs = None
+            self.witness_bound = None
+            self.witness_sense = ">="
 
         self.cvxpy_variable: cp.Variable | None = None
         self.cvxpy_constraints: list[cp.Constraint] = []
@@ -133,12 +164,13 @@ class QKDNoncontextualLP:
             # Snapshot the raw LP dual for diagnostics; downstream witness
             # consumers go through the QP-refined cached_property below.
             self._raw_dual_values_by_y[y] = self.duals.snapshot()
-            raw_coeffs = self._raw_dual_values_by_y[y].get("marginal_consistency")
-            if raw_coeffs is None:
-                raise RuntimeError(
-                    f"Missing marginal_consistency dual for y={y}; cannot form the guessing bound."
-                )
-            self._raw_guess_bound_coeffs_by_y[y] = np.asarray(raw_coeffs, dtype=float)
+            if self.data_constraint == "full":
+                raw_coeffs = self._raw_dual_values_by_y[y].get("marginal_consistency")
+                if raw_coeffs is None:
+                    raise RuntimeError(
+                        f"Missing marginal_consistency dual for y={y}; cannot form the guessing bound."
+                    )
+                self._raw_guess_bound_coeffs_by_y[y] = np.asarray(raw_coeffs, dtype=float)
 
         self.eve_guess_by_y = out
         self.solution_probabilities = self._extract_solution_probabilities()
@@ -195,6 +227,11 @@ class QKDNoncontextualLP:
         First access solves one refinement QP per Bob setting that produced a
         finite primal optimum; results are cached on the instance.
         """
+        if self.data_constraint != "full":
+            raise RuntimeError(
+                "Refined guessing-bound witnesses are only defined for data_constraint='full'; "
+                "in witness mode the input inequality itself is the certificate."
+            )
         if self.eve_guess_by_y is None:
             raise RuntimeError(
                 "QKDNoncontextualLP.solve_lp() must be called before reading refined duals."
@@ -270,8 +307,21 @@ class QKDNoncontextualLP:
         # P >= 0; dual is the reduced-cost tensor, shape (num_x, num_y, num_b, num_e).
         self.duals.add("probability_nonnegative", P >= 0.0)
 
-        # Data consistency: sum_e P[x, y, b, e] = p_data(b | x, y).
-        self.duals.add("marginal_consistency", cp.sum(P, axis=3) <= data)
+        if self.data_constraint == "full":
+            # Data consistency: sum_e P[x, y, b, e] = p_data(b | x, y).
+            self.duals.add("marginal_consistency", cp.sum(P, axis=3) <= data)
+        else:
+            # Witness mode: Eve's Bob-marginal need not reproduce the observed
+            # behavior. It only has to (i) be normalized per (x, y) and (ii)
+            # respect a lower bound on one linear witness of the behavior.
+            bob_marginal = cp.sum(P, axis=3)  # (num_x, num_y, num_b)
+            self.duals.add("normalization", cp.sum(bob_marginal, axis=2) <= np.ones((self.num_x, self.num_y)))
+            assert self.witness_coeffs is not None and self.witness_bound is not None
+            witness_expr = cp.sum(cp.multiply(self.witness_coeffs, bob_marginal))
+            if self.witness_sense == ">=":
+                self.duals.add("witness_bound", witness_expr >= float(self.witness_bound))
+            else:
+                self.duals.add("witness_bound", witness_expr <= float(self.witness_bound))
 
         # Preparation equivalence m: sum_x c[x] P[x, y, b, e] = 0 for every (y, b, e).
         # Broadcast c over (y, b, e), then contract the preparation axis 0.

@@ -1208,6 +1208,81 @@ class ContextualityProtocol:
             return float(self.key_rate_per_experimental_run_sdp(rate_type=rate_type))
         raise ValueError("method must be 'lp' or 'sdp'.")
 
+    def key_rate_from_witness(
+        self,
+        witness_coeffs: np.ndarray,
+        witness_bound: float,
+        *,
+        witness_sense: str = ">=",
+        method: SolverMethod = "lp",
+        rate_type: RateType = "reverse_fano",
+    ) -> dict[str, float]:
+        """Key rates when Eve is constrained only by a witness lower bound.
+
+        Instead of full consistency with the observed behavior, Eve's attack is
+        constrained by the operational equivalences plus the single linear
+        inequality ``sum_{x,y,b} c[x,y,b] P(b|x,y) >= witness_bound``. This is a
+        relaxation of the standard analysis, so the returned rates are valid
+        (typically weaker) lower bounds whenever the observed behavior satisfies
+        the witness bound. The honest parties' error-correction cost is still
+        evaluated on the observed behavior.
+
+        Returns a dict with Eve's guessing probability (average over key-eligible
+        settings), her uncertainty, and the key rates per key-generating run and
+        per experimental run.
+        """
+        rate_type = self._canonicalize_rate_type(rate_type)
+        coeffs = np.asarray(witness_coeffs, dtype=float)
+        if method == "lp":
+            solver = QKDNoncontextualLP(
+                self.scenario,
+                master_key_holder=self.master_key_holder,
+                where_key=self.where_key,
+                backend_solver=self.lp_solver,
+                qp_solver=self.qp_solver,
+                threads=self.lp_threads,
+                atol=self.atol,
+                verbose=self.lp_verbose,
+                data_constraint="witness",
+                witness_coeffs=coeffs,
+                witness_bound=float(witness_bound),
+                witness_sense=witness_sense,
+            )
+            guesses = solver.solve_lp()
+            guess = float(self._average_over_y(guesses, y_distribution=None, skip_nan=True))
+        elif method == "sdp":
+            solver = QKDNoncontextualSDP(
+                self.scenario,
+                projective_bob=self.sdp_projective_bob,
+                projective_eve=self.sdp_projective_eve,
+                npa_level_bob=self.sdp_npa_level_bob,
+                npa_level_eve=self.sdp_npa_level_eve,
+                use_u_only=self.sdp_use_u_only,
+                master_key_holder=self.master_key_holder,
+                where_key=self.where_key,
+                threads=self.sdp_threads,
+                solver=self.sdp_solver,
+                atol=self.atol,
+                verbose=self.sdp_verbose,
+                data_constraint="witness",
+                witness_coeffs=coeffs,
+                witness_bound=float(witness_bound),
+                witness_sense=witness_sense,
+            )
+            solver.solve_sdp()
+            guess = float(solver.eve_success_probability)
+        else:
+            raise ValueError("method must be 'lp' or 'sdp'.")
+
+        uncertainty = float(self.uncertainty_from_guess(guess, rate_type=rate_type))
+        rate_key_run = uncertainty - float(self.other_party_uncertainty_key_weighted)
+        return {
+            "eve_guess": guess,
+            "eve_uncertainty": uncertainty,
+            "key_rate_per_key_run": float(rate_key_run),
+            "key_rate_per_experimental_run": float(self.key_generation_probability_per_run * rate_key_run),
+        }
+
     @cached_property
     def eve_uncertainty_key_min_entropy_by_y_lp(self) -> np.ndarray:
         """Eve min-entropy lower-bound vector from LP guessing probabilities."""

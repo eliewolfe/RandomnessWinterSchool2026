@@ -1,0 +1,372 @@
+{
+ "aligned_single_y0": {
+  "lp_guess_by_y": [
+   0.75,
+   NaN
+  ],
+  "lp_guess_avg": 0.75,
+  "honest_cost_H(K|B)": 0.5,
+  "lp_rate_key_run_RF": 0.0,
+  "lp_rate_key_run_ME": -0.08496250072115619,
+  "lp_rate_exp_run_RF": 0.0,
+  "key_gen_prob": 0.5,
+  "sdp_guess": 0.7499999890584276,
+  "sdp_rate_key_run_RF": 2.188314485174203e-08,
+  "sdp_rate_exp_run_RF": 1.0941572425871016e-08
+ },
+ "misaligned_single_y0": {
+  "lp_guess_by_y": [
+   0.6464466094067263,
+   NaN
+  ],
+  "lp_guess_avg": 0.6464466094067263,
+  "honest_cost_H(K|B)": 0.6008760366928562,
+  "lp_rate_key_run_RF": 0.1062307444936913,
+  "lp_rate_key_run_ME": 0.02852083668936367,
+  "lp_rate_exp_run_RF": 0.05311537224684565,
+  "key_gen_prob": 0.5,
+  "sdp_guess": 0.5001358090063899,
+  "sdp_rate_key_run_RF": 0.3988523452943641,
+  "sdp_rate_exp_run_RF": 0.19942617264718204
+ },
+ "misaligned_witness_y0_coeffs": [
+  [
+   [
+    0.12499062259738845,
+    0.12499062259736035
+   ],
+   [
+    0.2500093774026083,
+    9.377402624712824e-06
+   ]
+  ],
+  [
+   [
+    0.12499062259734717,
+    0.12499062259730845
+   ],
+   [
+    9.377402653611833e-06,
+    0.25000937740267276
+   ]
+  ],
+  [
+   [
+    0.12499062259735087,
+    0.12499062259738894
+   ],
+   [
+    9.377402657721095e-06,
+    0.25000937740264145
+   ]
+  ],
+  [
+   [
+    0.12499062259736536,
+    0.12499062259739355
+   ],
+   [
+    0.25000937740256707,
+    9.377402630885977e-06
+   ]
+  ]
+ ],
+ "misaligned_witness_y0_text": "Eve guessing-probability upper bound at y=0 (held by Alice, LP dual):\n  P_E^guess(master_key|y=0)  <=  sum_xyb c(x,y,b) P(b|x,y)  =  0.6464\n  coefficients c:\n    +0.25 * [ P(0|0,1), P(1|1,1), P(1|2,1), P(0|3,1) ]\n    +0.125 * [ P(0|0,0), P(1|0,0), P(0|1,0), P(1|1,0), P(0|2,0), P(1|2,0), P(0|3,0), P(1|3,0) ]\n    +0 * [ P(1|0,1), P(0|1,1), P(0|2,1), P(1|3,1) ]",
+ "visibility_scan_lp": [
+  {
+   "eta": 0.5,
+   "lp_guess_y0": 0.823223304703363,
+   "lp_rate_key_run_RF": -0.5542989100086546,
+   "lp_rate_key_run_ME": -0.6272080299096019,
+   "honest_cost": 0.9078523006019286
+  },
+  {
+   "eta": 0.525,
+   "lp_guess_y0": 0.8143844699385312,
+   "lp_rate_key_run_RF": -0.5269388532223114,
+   "lp_rate_key_run_ME": -0.6019518683829217,
+   "honest_cost": 0.898169913345249
+  },
+  {
+   "eta": 0.55,
+   "lp_guess_y0": 0.8055456351736994,
+   "lp_rate_key_run_RF": -0.4990558395839464,
+   "lp_rate_key_run_ME": -0.5760027960853229,
+   "honest_cost": 0.8879645692365477
+  },
+  {
+   "eta": 0.575,
+   "lp_guess_y0": 0.7967068004088675,
+   "lp_rate_key_run_RF": -0.47064158635616526,
+   "lp_rate_key_run_ME": -0.549348779959439,
+   "honest_cost": 0.8772279855384302
+  },
+  {
+   "eta": 0.6,
+   "lp_guess_y0": 0.7878679656440357,
+   "lp_rate_key_run_RF": -0.44168713977992247,
+   "lp_rate_key_run_ME": -0.5219769904043314,
+   "honest_cost": 0.865951208491851
+  },
+  {
+   "eta": 0.625,
+   "lp_guess_y0": 0.7790291308792039,
+   "lp_rate_key_run_RF": -0.4121828200342096,
+   "lp_rate_key_run_ME": -0.4938737405703515,
+   "honest_cost": 0.8541245582758018
+  },
+  {
+   "eta": 0.65,
+   "lp_guess_y0": 0.7701902961143721,
+   "lp_rate_key_run_RF": -0.38211815887170597,
+   "lp_rate_key_run_ME": -0.46502441800674554,
+   "honest_cost": 0.8417375666429618
+  },
+  {
+   "eta": 0.675,
+   "lp_guess_y0": 0.7613514613495402,
+   "lp_rate_key_run_RF": -0.3514818287527842,
+   "lp_rate_key_run_ME": -0.43541340746201057,
+   "honest_cost": 0.8287789060537037
+  },
+  {
+   "eta": 0.7,
+   "lp_guess_y0": 0.7525126265847084,
+   "lp_rate_key_run_RF": -0.3202615620594069,
+   "lp_rate_key_run_ME": -0.4050240033943209,
+   "honest_cost": 0.8152363088899901
+  },
+  {
+   "eta": 0.725,
+   "lp_guess_y0": 0.7436737918198766,
+   "lp_rate_key_run_RF": -0.2884440586706394,
+   "lp_rate_key_run_ME": -0.3738383104475312,
+   "honest_cost": 0.8010964750308862
+  },
+  {
+   "eta": 0.75,
+   "lp_guess_y0": 0.7348349570550448,
+   "lp_rate_key_run_RF": -0.2560148798055779,
+   "lp_rate_key_run_ME": -0.3418371297701422,
+   "honest_cost": 0.7863449656954884
+  },
+  {
+   "eta": 0.775,
+   "lp_guess_y0": 0.7259961222902129,
+   "lp_rate_key_run_RF": -0.22295832556446205,
+   "lp_rate_key_run_ME": -0.3089998285771762,
+   "honest_cost": 0.7709660809840362
+  },
+  {
+   "eta": 0.8,
+   "lp_guess_y0": 0.7171572875253811,
+   "lp_rate_key_run_RF": -0.18925729299355654,
+   "lp_rate_key_run_ME": -0.2753041897470861,
+   "honest_cost": 0.7549427179427943
+  },
+  {
+   "eta": 0.825,
+   "lp_guess_y0": 0.708318452760549,
+   "lp_rate_key_run_RF": -0.1548931107215391,
+   "lp_rate_key_run_ME": -0.24072623746506266,
+   "honest_cost": 0.738256205200441
+  },
+  {
+   "eta": 0.85,
+   "lp_guess_y0": 0.6994796179957172,
+   "lp_rate_key_run_RF": -0.11984534520586909,
+   "lp_rate_key_run_ME": -0.2052400339116519,
+   "honest_cost": 0.7208861092144346
+  },
+  {
+   "eta": 0.875,
+   "lp_guess_y0": 0.6906407832308854,
+   "lp_rate_key_run_RF": -0.08409157230469688,
+   "lp_rate_key_run_ME": -0.16881744066915194,
+   "honest_cost": 0.7028100058429261
+  },
+  {
+   "eta": 0.9,
+   "lp_guess_y0": 0.6818019484660536,
+   "lp_rate_key_run_RF": -0.04760710613664676,
+   "lp_rate_key_run_ME": -0.13142783676114989,
+   "honest_cost": 0.6840032092045396
+  },
+  {
+   "eta": 0.925,
+   "lp_guess_y0": 0.6729631137012217,
+   "lp_rate_key_run_RF": -0.010364674839343113,
+   "lp_rate_key_run_ME": -0.09303778288480236,
+   "honest_cost": 0.6644384474368996
+  },
+  {
+   "eta": 0.95,
+   "lp_guess_y0": 0.6641242789363899,
+   "lp_rate_key_run_RF": 0.02766597035746876,
+   "lp_rate_key_run_ME": -0.05361061819570312,
+   "honest_cost": 0.6440854717697514
+  },
+  {
+   "eta": 0.975,
+   "lp_guess_y0": 0.6552854441715581,
+   "lp_rate_key_run_RF": 0.06651853073174885,
+   "lp_rate_key_run_ME": -0.01310597159653104,
+   "honest_cost": 0.622910580925135
+  },
+  {
+   "eta": 1.0,
+   "lp_guess_y0": 0.6464466094067263,
+   "lp_rate_key_run_RF": 0.1062307444936913,
+   "lp_rate_key_run_ME": 0.02852083668936367,
+   "honest_cost": 0.6008760366928562
+  }
+ ],
+ "lp_rf_threshold_eta": 0.9318659901618958,
+ "visibility_scan_sdp": [
+  {
+   "eta": 0.5,
+   "sdp_guess": 0.8232232748365493,
+   "sdp_rate_key_run_RF": -0.5542988502750272,
+   "lp_rate_key_run_RF": -0.5542989100086546
+  },
+  {
+   "eta": 0.55,
+   "sdp_guess": 0.8055455231273754,
+   "sdp_rate_key_run_RF": -0.4990556154912984,
+   "lp_rate_key_run_RF": -0.4990558395839464
+  },
+  {
+   "eta": 0.6,
+   "sdp_guess": 0.7878677741826716,
+   "sdp_rate_key_run_RF": -0.4416867568571943,
+   "lp_rate_key_run_RF": -0.44168713977992247
+  },
+  {
+   "eta": 0.65,
+   "sdp_guess": 0.7701902939101843,
+   "sdp_rate_key_run_RF": -0.38211815446333053,
+   "lp_rate_key_run_RF": -0.38211815887170597
+  },
+  {
+   "eta": 0.7,
+   "sdp_guess": 0.7525126200893598,
+   "sdp_rate_key_run_RF": -0.32026154906870974,
+   "lp_rate_key_run_RF": -0.3202615620594069
+  },
+  {
+   "eta": 0.75,
+   "sdp_guess": 0.7348349554506717,
+   "sdp_rate_key_run_RF": -0.25601487659683175,
+   "lp_rate_key_run_RF": -0.2560148798055779
+  },
+  {
+   "eta": 0.8,
+   "sdp_guess": 0.7171572402834748,
+   "sdp_rate_key_run_RF": -0.18925719850974398,
+   "lp_rate_key_run_RF": -0.18925729299355654
+  },
+  {
+   "eta": 0.85,
+   "sdp_guess": 0.699479569521581,
+   "sdp_rate_key_run_RF": -0.11984524825759657,
+   "lp_rate_key_run_RF": -0.11984534520586909
+  },
+  {
+   "eta": 0.9,
+   "sdp_guess": 0.6818019193289707,
+   "sdp_rate_key_run_RF": -0.047607047862481044,
+   "lp_rate_key_run_RF": -0.04760710613664676
+  },
+  {
+   "eta": 0.95,
+   "sdp_guess": 0.6628238062365097,
+   "sdp_rate_key_run_RF": 0.030266915757229174,
+   "lp_rate_key_run_RF": 0.02766597035746876
+  },
+  {
+   "eta": 1.0,
+   "sdp_guess": 0.5001358090063899,
+   "sdp_rate_key_run_RF": 0.3988523452943641,
+   "lp_rate_key_run_RF": 0.1062307444936913
+  }
+ ],
+ "visibility_scan_sdp_level2": [
+  {
+   "eta": 0.5,
+   "sdp2_guess_raw": 0.8232233046891677,
+   "sdp2_guess_capped": 0.8232233046891677,
+   "sdp2_rate_key_run_RF": -0.554298909980264,
+   "lp_rate_key_run_RF": -0.5542989100086546
+  },
+  {
+   "eta": 0.55,
+   "sdp2_guess_raw": 0.805545342532483,
+   "sdp2_guess_capped": 0.805545342532483,
+   "sdp2_rate_key_run_RF": -0.49905525430151365,
+   "lp_rate_key_run_RF": -0.4990558395839464
+  },
+  {
+   "eta": 0.6,
+   "sdp2_guess_raw": 0.787867387361481,
+   "sdp2_guess_capped": 0.787867387361481,
+   "sdp2_rate_key_run_RF": -0.441685983214813,
+   "lp_rate_key_run_RF": -0.44168713977992247
+  },
+  {
+   "eta": 0.65,
+   "sdp2_guess_raw": 0.7701902957661798,
+   "sdp2_guess_capped": 0.7701902957661798,
+   "sdp2_rate_key_run_RF": -0.38211815817532147,
+   "lp_rate_key_run_RF": -0.38211815887170597
+  },
+  {
+   "eta": 0.7,
+   "sdp2_guess_raw": 0.7525108637612546,
+   "sdp2_guess_capped": 0.7525108637612546,
+   "sdp2_rate_key_run_RF": -0.3202580364124994,
+   "lp_rate_key_run_RF": -0.3202615620594069
+  },
+  {
+   "eta": 0.75,
+   "sdp2_guess_raw": 0.7348336189499425,
+   "sdp2_guess_capped": 0.7348336189499425,
+   "sdp2_rate_key_run_RF": -0.25601220359537336,
+   "lp_rate_key_run_RF": -0.2560148798055779
+  },
+  {
+   "eta": 0.8,
+   "sdp2_guess_raw": 0.7171572750741253,
+   "sdp2_guess_capped": 0.7171572750741253,
+   "sdp2_rate_key_run_RF": -0.18925726809104493,
+   "lp_rate_key_run_RF": -0.18925729299355654
+  },
+  {
+   "eta": 0.85,
+   "sdp2_guess_raw": 0.6994796041183873,
+   "sdp2_guess_capped": 0.6994796041183873,
+   "sdp2_rate_key_run_RF": -0.11984531745120919,
+   "lp_rate_key_run_RF": -0.11984534520586909
+  },
+  {
+   "eta": 0.9,
+   "sdp2_guess_raw": 0.6798108249606731,
+   "sdp2_guess_capped": 0.6798108249606731,
+   "sdp2_rate_key_run_RF": -0.04362485912588587,
+   "lp_rate_key_run_RF": -0.04760710613664676
+  },
+  {
+   "eta": 0.95,
+   "sdp2_guess_raw": 0.6415773080484587,
+   "sdp2_guess_capped": 0.6415773080484587,
+   "sdp2_rate_key_run_RF": 0.07275991213333122,
+   "lp_rate_key_run_RF": 0.02766597035746876
+  },
+  {
+   "eta": 1.0,
+   "sdp2_guess_raw": 0.500190648418838,
+   "sdp2_guess_capped": 0.500190648418838,
+   "sdp2_rate_key_run_RF": 0.3987426664694679,
+   "lp_rate_key_run_RF": 0.1062307444936913
+  }
+ ]
+}

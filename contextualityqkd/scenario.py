@@ -381,6 +381,45 @@ class ContextualityScenario:
         return self._simplify_symbolic_array(self.opeq_meas_symbolic)
 
     @cached_property
+    def completeness_opeq_meas(self) -> np.ndarray:
+        """Unit-measurement-trace OPEQs: ``sum_b P(b|x,0) = sum_b P(b|x,y)``.
+
+        These ``Y - 1`` relations assert only that every measurement setting has
+        the same total trace (the prepare-and-measure analogue of no-signalling
+        in Bell scenarios). They hold in every scenario, and they are the part
+        of the measurement operational equivalences that carries no information
+        about nontrivial identities among the effects. Shape ``(Y-1, Y, B)``,
+        with support only on valid (unpadded) outcome slots.
+        """
+        num_y = int(self.Y_cardinality)
+        num_b = int(self.B_cardinality)
+        counts = self.b_cardinality_per_y.astype(int, copy=False)
+        rows = np.zeros((max(num_y - 1, 0), num_y, num_b), dtype=float)
+        for y in range(1, num_y):
+            rows[y - 1, 0, : int(counts[0])] = 1.0
+            rows[y - 1, y, : int(counts[y])] = -1.0
+        return rows
+
+    def restricted_to_completeness_meas_opeqs(self) -> "ContextualityScenario":
+        """Return a scenario with measurement OPEQs reduced to completeness only.
+
+        The derived scenario carries the same behavior table and the same
+        preparation operational equivalences, but its measurement operational
+        equivalences are only the unit-measurement-trace relations of
+        :attr:`completeness_opeq_meas` (plus the structural zeros for padded
+        outcomes, re-appended by the constructor). Every solver consuming the
+        derived scenario therefore grants Eve strictly more freedom than the
+        original: any nontrivial identity among Bob's effects is forgotten.
+        """
+        return ContextualityScenario(
+            data=self.data_symbolic,
+            opeq_preps=self.opeq_preps_symbolic,
+            opeq_meas=self.completeness_opeq_meas,
+            atol=self.atol,
+            verbose=False,
+        )
+
+    @cached_property
     def has_symbolic_content(self) -> bool:
         """Whether any stored symbolic entry is not a machine float/integer."""
         arrays = [self.data_symbolic, self.opeq_preps_symbolic, self.opeq_meas_symbolic]

@@ -146,8 +146,8 @@ Section~\ref{sec:scenarios} fixes notation for contextuality scenarios
 and operational equivalences. Section~\ref{sec:adversaries} formalizes
 the two adversary models and derives the LP and SDP bounds on Eve's
 guessing probability. Section~\ref{sec:keyrates} assembles the key-rate
-formulas and the \wherekey{} bookkeeping. Section~\ref{sec:casestudies}
-applies the pipeline to a collection of protocols, and
+formulas and the \wherekey{} bookkeeping. Section~\ref{sec:results}
+presents our results across a collection of protocols, and
 Section~\ref{sec:discussion} concludes.
 
 \section{Contextuality scenarios and operational equivalences}
@@ -184,12 +184,163 @@ error-correction cost between the honest parties; key rate per
 key-generating round vs.\ per experimental run; the \wherekey{}
 assignment and its automatic optimization.}
 
-\section{Case studies}
-\label{sec:casestudies}
+\section{Results}
+\label{sec:results}
 
-\todo{BB84; the gbit; the $(3,2)$-PORAC; the 18-ray Cabello and 24-ray
-Peres Kochen--Specker sets; hexagon and XZ-ring families; Bell-local
-probability protocols. Tables of LP vs.\ SDP key rates.}
+\subsection{Warm-up: key from a single measurement setting}
+\label{sec:results-single-setting}
+
+We begin with the simplest protocol our framework analyzes: one in which
+only a \emph{single} measurement setting of Bob is ever used to establish
+key. This case is pedagogically privileged. When several settings
+generate key, Eve profits from holding a quantum memory: she lets her
+probe interact with the system in transit, waits for the public
+announcement of Bob's setting $y$, and only then measures her probe with
+a $y$-dependent measurement. But when the key is distilled from a single
+setting $y^{\ast}$, nothing is gained by waiting: on every
+key-generating round the announcement is a foregone conclusion, and
+Eve's optimal individual attack collapses to one fixed probe measurement
+chosen in advance. The full apparatus of delayed, setting-dependent
+product measurements --- introduced in
+Sec.~\ref{sec:adversaries} --- is therefore not yet needed here,
+and the reader may treat this subsection as a self-contained warm-up.
+(Parameter-estimation rounds on the other settings are still essential:
+they are what pins down the observed behavior, and with it Eve's
+constraints.)
+
+The protocol is a deliberate twist on BB84~\cite{BB84}. Alice prepares,
+uniformly at random, one of the four qubit states
+$\ket{0},\ket{1},\ket{+},\ket{-}$ --- the BB84 states, whose two basis
+ensembles furnish the preparation operational equivalence
+$\tfrac12\rho_{0}+\tfrac12\rho_{1}=\tfrac12\rho_{+}+\tfrac12\rho_{-}$.
+Bob, however, does \emph{not} measure in the $Z$ and $X$ bases. His two
+settings are the intermediate bases rotated by $\pi/4$ in the $X$--$Z$
+plane (eigenbases at angles $\pi/4$ and $3\pi/4$). The raw key dit for a
+round is, on Alice's side, the modal outcome of the announced
+measurement for her preparation, and on Bob's side his actual outcome;
+the mismatch is paid for in error correction, at cost
+$H(K|B,y^{\ast})=h\!\left(\cos^{2}\tfrac{\pi}{8}\right)\approx 0.6009$
+bits per key round, where $h$ is the binary entropy.
+
+Why not plain BB84? Because against the operational adversary, plain
+BB84 --- Alice's four states, Bob measuring $Z$ and $X$ --- certifies
+\emph{nothing}. Our LP, which is exact for that adversary, returns
+$\pguess = \tfrac34$ for either setting, and the resulting key rate
+vanishes ($0.0000$ bits reverse-Fano; the min-entropy bound is strictly
+negative). No qubit assumption enters our framework: Eve is free to
+realize the observed BB84 behavior and its operational equivalences on a
+carrier of any dimension, and in that larger arena the noiseless-BB84
+intuition ``no disturbance implies no information'' simply fails. (The
+same statistics \emph{do} certify key under an explicit dimension bound
+\cite{PawlowskiBrunner2011}; we return to the comparison between
+dimension assumptions and operational-equivalence assumptions in
+Sec.~\ref{sec:discussion}.) Rotating Bob's measurements away from the
+preparation bases restores security: intuitively, the rotated statistics
+force any operational decomposition available to Eve to spread its
+weight across both of Alice's basis ensembles.
+
+Table~\ref{tab:single-setting} collects the noiseless numbers for the
+rotated protocol with key generated only at $y^{\ast}=0$. Against the
+operational adversary the LP returns, exactly,
+\begin{equation}
+  \pguess(y^{\ast}) \;=\; 1-\frac{\sqrt{2}}{4}\;\approx\;0.6464,
+\end{equation}
+and with it a positive reverse-Fano key rate of $0.1062$ bits per
+key-generating round. Because only half of all rounds are
+key-generating (Bob's other setting is pure parameter estimation), the
+key rate \emph{per experimental run} is half that, $0.0531$ bits --- our
+first encounter with the distinction, developed in
+Sec.~\ref{sec:keyrates}, that a nontrivial \wherekey{} assignment drives
+a wedge between the two bookkeepings. Against the quantum adversary the
+SDP certifies $\pguess(y^{\ast})\le 0.5001$ --- Eve learns essentially
+nothing --- so the certified quantum key rate, $0.3989$ bits per key
+round, nearly saturates the error-correction-limited maximum
+$1-h(\cos^{2}\tfrac{\pi}{8})\approx 0.3991$.
+
+The LP also hands us its dual certificate. For the key-generating
+setting the (L2-refined) witness inequality reads
+\begin{equation}
+\label{eq:single-setting-witness}
+  \pguess(y^{\ast}=0)\;\le\;\frac12
+  +\frac14\Bigl[P(0|0,1)+P(1|1,1)+P(1|2,1)+P(0|3,1)\Bigr],
+\end{equation}
+valid for every behavior satisfying the protocol's operational
+equivalences; it is tight at the observed data, where each bracketed
+term equals $\sin^{2}\tfrac{\pi}{8}$. The witness exposes the security
+mechanism at a glance: Eve's ability to guess the key generated at
+$y=0$ is controlled entirely by how strongly the data at the
+\emph{other} setting deviates from the outcome-deterministic extremes
+--- the parameter-estimation setting polices the key-generating one.
+
+Figure~\ref{fig:single-setting-noise} traces both key rates as the
+preparations are depolarized with visibility $\eta$ (each state mixed
+with the maximally mixed state, which preserves the preparation
+operational equivalence). The operational-adversary rate stays positive
+down to $\eta^{\ast}\approx 0.932$. The quantum-adversary curve is
+computed at level~2 of the SDP hierarchy; being a relaxation, it is a
+certified \emph{lower} bound on the true quantum key rate everywhere,
+whereas the LP curve is exact for the operational adversary --- an
+asymmetry we dwell on in Sec.~\ref{sec:results-porac}.
+
+\begin{table}
+\caption{\label{tab:single-setting}Noiseless single-key-setting rates
+(bits per key-generating round; per experimental run in parentheses)
+for BB84-aligned versus rotated Bob measurements, key from $y^{\ast}=0$
+only, Alice holding the master key. LP values are exact for the
+operational (OPT) adversary; SDP values are certified bounds on the
+quantum adversary (NPA level 1). \todo{Finalize formatting.}}
+\begin{ruledtabular}
+\begin{tabular}{lcc}
+ & BB84-aligned & rotated ($\pi/4$) \\
+\colrule
+$\pguess$, OPT adversary (LP, exact) & $3/4$ & $1-\sqrt{2}/4\approx0.6464$ \\
+$\pguess$, quantum adversary (SDP $\le$) & $0.7500$ & $0.5001$ \\
+$H(K|B,y^{\ast})$ (error correction) & $0$ & $0.6009$ \\
+key rate, OPT, reverse-Fano & $0.0000$ & $0.1062$ ($0.0531$) \\
+key rate, OPT, min-entropy & $<0$ & $0.0285$ ($0.0143$) \\
+key rate, quantum, reverse-Fano & $0.0000$ & $0.3989$ ($0.1994$) \\
+\end{tabular}
+\end{ruledtabular}
+\end{table}
+
+\begin{figure}
+\includegraphics[width=\columnwidth]{figures/fig_r1_visibility}
+\caption{\label{fig:single-setting-noise}Key rate per key-generating
+round for the rotated single-setting protocol under preparation
+depolarization with visibility $\eta$. The operational-adversary curve
+(LP) is exact and crosses zero at $\eta^{\ast}\approx0.932$; the
+quantum-adversary curve (SDP hierarchy, level 2) is a certified lower
+bound on the true quantum rate. \todo{Finalize styling.}}
+\end{figure}
+
+\subsection{Separating quantum from operational adversaries: the
+$(3,2)$-PORAC}
+\label{sec:results-porac}
+
+\todo{R2: zero OPT rate (LP, exact) vs.\ positive certified quantum
+rate (SDP); comparison with Ref.~\cite{ChaturvediFarkasWright2021};
+rate vs.\ $\eta$; LP-tight vs.\ SDP-hierarchy discussion.}
+
+\subsection{Designing the key map: nontrivial \wherekey{}}
+\label{sec:results-wherekey}
+
+\todo{R3: protocol where restricting the key-generating $x$'s per $y$
+strictly improves the key rate per experimental run; automatic
+optimizer.}
+
+\subsection{Which operational equivalences power the key?}
+\label{sec:results-opeqs}
+
+\todo{R4: completeness-only measurement operational equivalences
+(the no-signalling analogue) vs.\ the full learned set; classification
+of protocols; contrast with nonlocality-based QKD.}
+
+\subsection{Key from a noncontextuality-inequality violation alone}
+\label{sec:results-witness}
+
+\todo{R6: key rates from operational equivalences plus a witness
+lower bound only; rate-vs-violation curves; experimental friendliness
+via secondary procedures~\cite{Mazurek2016,Zhang2025secondary}.}
 
 \section{Discussion}
 \label{sec:discussion}

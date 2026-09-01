@@ -87,10 +87,43 @@ class QKDNoncontextualSDP:
         threads: int | None = None,
         atol: float | None = None,
         verbose: int | bool = 0,
+        data_constraint: Literal["full", "witness"] = "full",
+        witness_coeffs: np.ndarray | None = None,
+        witness_bound: float | None = None,
+        witness_sense: Literal[">=", "<="] = ">=",
     ) -> None:
         if not isinstance(scenario, ContextualityScenario):
             raise TypeError("scenario must be a ContextualityScenario instance.")
         self.scenario = scenario
+        # Data-constraint mode. "full" pins Bob's observed marginal entrywise;
+        # "witness" keeps only a single linear lower bound on the behavior
+        # (outcome normalization is built into the Naimark completeness
+        # identities, so no extra normalization constraint is needed).
+        self.data_constraint = str(data_constraint).strip().lower()
+        if self.data_constraint not in {"full", "witness"}:
+            raise ValueError("data_constraint must be 'full' or 'witness'.")
+        if self.data_constraint == "witness":
+            if witness_coeffs is None or witness_bound is None:
+                raise ValueError("witness mode requires witness_coeffs and witness_bound.")
+            self.witness_coeffs: np.ndarray | None = np.asarray(witness_coeffs, dtype=float)
+            expected = (
+                int(scenario.X_cardinality),
+                int(scenario.Y_cardinality),
+                int(scenario.B_cardinality),
+            )
+            if self.witness_coeffs.shape != expected:
+                raise ValueError(f"witness_coeffs must have shape {expected}.")
+            self.witness_bound: float | None = float(witness_bound)
+            sense = str(witness_sense).strip()
+            if sense not in {">=", "<="}:
+                raise ValueError("witness_sense must be '>=' or '<='.")
+            self.witness_sense: str = sense
+        else:
+            if witness_coeffs is not None or witness_bound is not None:
+                raise ValueError("witness_coeffs/witness_bound are only valid with data_constraint='witness'.")
+            self.witness_coeffs = None
+            self.witness_bound = None
+            self.witness_sense = ">="
         self.projective_bob = bool(projective_bob)
         self.projective_eve = bool(projective_eve)
         self.npa_level_bob = self._validate_level(npa_level_bob, "npa_level_bob")
@@ -366,9 +399,12 @@ class QKDNoncontextualSDP:
             self._add_normalization_and_operator_constraints(x)
             self._add_moment_consistency_constraints(x)
             self._add_measurement_opeq_constraints(x, party="B")
-            self._add_observed_bob_constraints(x)
+            if self.data_constraint == "full":
+                self._add_observed_bob_constraints(x)
             self._add_bob_eve_marginal_constraints(x)
             self._add_probability_bounds(x)
+        if self.data_constraint == "witness":
+            self._add_witness_bound_constraint()
         self._add_preparation_opeq_constraints()
         self.cvxpy_objective = self._build_objective_expr()
         self.cvxpy_problem = cp.Problem(cp.Maximize(self.cvxpy_objective), self.cvxpy_constraints)
@@ -521,6 +557,28 @@ class QKDNoncontextualSDP:
                     self._single_probability_expr(x, "B", y, b),
                     float(data[x, y, b]),
                 )
+
+    def _add_witness_bound_constraint(self) -> None:
+        """Single inequality ``sum_{x,y,b} c[x,y,b] P(b|x,y) >= witness_bound``."""
+        assert self.witness_coeffs is not None and self.witness_bound is not None
+        pieces: list[cp.Expression] = []
+        for x in range(self.scenario.X_cardinality):
+            for y in range(self.scenario.Y_cardinality):
+                for b in range(int(self.scenario.b_cardinality_per_y[y])):
+                    coeff = float(self.witness_coeffs[x, y, b])
+                    if abs(coeff) <= self.atol:
+                        continue
+                    pieces.append(coeff * self._single_probability_expr(x, "B", y, b))
+        if not pieces:
+            raise ValueError("witness_coeffs has no support on valid (x, y, b) entries.")
+        expr = sum(pieces)
+        real_expr = cp.real(expr) if self.complex_moments else expr
+        if self.complex_moments:
+            self._add_constraint(("witness_bound", "imag_zero"), cp.imag(expr) == 0.0)
+        if self.witness_sense == ">=":
+            self._add_constraint(("witness_bound", "lower"), real_expr >= float(self.witness_bound))
+        else:
+            self._add_constraint(("witness_bound", "upper"), real_expr <= float(self.witness_bound))
 
     def _add_bob_eve_marginal_constraints(self, x: int) -> None:
         for y in range(self.scenario.Y_cardinality):
