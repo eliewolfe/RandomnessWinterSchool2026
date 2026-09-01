@@ -863,7 +863,6 @@ source = { editable = "." }
 dependencies = [
     { name = "cvxpy", version = "1.7.5", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
     { name = "cvxpy", version = "1.9.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
-    { name = "gurobipy" },
     { name = "methodtools" },
     { name = "mosek" },
     { name = "networkx", version = "3.4.2", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
@@ -872,28 +871,40 @@ dependencies = [
     { name = "numpy", version = "2.2.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
     { name = "numpy", version = "2.4.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
     { name = "pycddlib" },
-    { name = "pytest" },
     { name = "scipy", version = "1.15.3", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
     { name = "scipy", version = "1.17.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
     { name = "sympy" },
     { name = "tqdm" },
 ]
 
+[package.optional-dependencies]
+gurobi = [
+    { name = "gurobipy" },
+]
+
+[package.dev-dependencies]
+dev = [
+    { name = "pytest" },
+]
+
 [package.metadata]
 requires-dist = [
     { name = "cvxpy", specifier = ">=1.7.5" },
-    { name = "gurobipy", specifier = ">=13.0.2" },
+    { name = "gurobipy", marker = "extra == 'gurobi'", specifier = ">=13.0.2" },
     { name = "methodtools", specifier = ">=0.4.7" },
     { name = "mosek", specifier = ">=11.2.0" },
     { name = "networkx", specifier = ">=3.4.2" },
     { name = "numba", specifier = ">=0.65.1" },
     { name = "numpy", specifier = ">=2.2.6" },
     { name = "pycddlib", specifier = ">=3.0.2" },
-    { name = "pytest", specifier = ">=9.0.3" },
     { name = "scipy", specifier = ">=1.15.3" },
     { name = "sympy", specifier = ">=1.14.0" },
     { name = "tqdm", specifier = ">=4.67.3" },
 ]
+provides-extras = ["gurobi"]
+
+[package.metadata.requires-dev]
+dev = [{ name = "pytest", specifier = ">=9.0.3" }]
 
 [[package]]
 name = "scipy"

@@ -23,8 +23,16 @@ dependencies = [
   "networkx>=3.4.2",
   "tqdm>=4.67.3",
   "cvxpy>=1.7.5",
-  "pytest>=9.0.3",
+]
+
+[project.optional-dependencies]
+gurobi = [
   "gurobipy>=13.0.2",
+]
+
+[dependency-groups]
+dev = [
+  "pytest>=9.0.3",
 ]
 
 [tool.setuptools.packages.find]
