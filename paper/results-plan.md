@@ -350,6 +350,12 @@ with plateaus; that is fine (and interesting) but should be anticipated.
 
 ## Phased execution
 
+> **Status (2026-09-01):** Phases 0-5 executed; Results VI.A-VI.E drafted in
+> `main.tex` with figures under `paper/figures/` and raw numbers under
+> `paper/data/`. Phase 6 (R5, dimension-bound comparison) remains optional
+> and unstarted. The Zhang-Spekkens reference is confirmed as
+> arXiv:2507.01122 with 'secondary procedures' terminology.
+
 - **Phase 0 (infrastructure).** TeX toolchain in the session (done — being
   reinstalled after a mirror hiccup); `latexmk` build of `main.tex`;
   PDF delivered on every substantive paper edit.

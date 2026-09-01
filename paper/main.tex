@@ -557,9 +557,86 @@ restriction flips the rate's sign, if one exists in a natural family.}
 \subsection{Key from a noncontextuality-inequality violation alone}
 \label{sec:results-witness}
 
-\todo{R6: key rates from operational equivalences plus a witness
-lower bound only; rate-vs-violation curves; experimental friendliness
-via secondary procedures~\cite{Mazurek2016,Zhang2025secondary}.}
+Everything so far conditioned Eve on the \emph{entire} observed
+behavior $P(b|x,y)$. An experimentalist would much rather report a
+single number --- the violation of one noncontextuality inequality ---
+and read the key rate off a curve, exactly as device-independent QKD
+reads its rate off the CHSH value. Our framework supports this
+directly: in both solvers we may replace the full data-consistency
+constraints by (i) normalization and (ii) the single linear constraint
+that Eve's effective behavior violates a chosen witness at least as
+much as the observed data does. Since this only removes constraints,
+the resulting rate is a valid --- generally weaker --- lower bound on
+the full-data rate, and it is a monotone function of the violation
+alone.
+
+Figure~\ref{fig:witness-only} shows the resulting rate-vs-violation
+curves, using each protocol's contextual-fraction witness (the
+L2-refined dual of Sec.~\ref{sec:scenarios}, precisely the
+noncontextuality inequality an experiment would quote). Three lessons,
+one per curve:
+
+\emph{The hexagon loses nothing.} Against the operational adversary,
+Eve's guessing probability under the hexagon witness constraint is
+exactly affine in the imposed violation, $\pguess = 1-w/4$ (with the
+witness normalized so the noncontextual bound is $0$ and the observed,
+maximally contextual behavior reaches $w_{\mathrm{obs}}=1$), so the
+rate climbs linearly to $0.500$ bits per key round at the observed
+violation --- the \emph{full} rate of Table~\ref{tab:wherekey}. For
+this protocol a single inequality is exactly as powerful as full
+tomography of the behavior, against every operational (hence every
+quantum) eavesdropper.
+
+\emph{The rotated BB84 needs the quantum assumption.} Its
+contextual-fraction witness constrains the operational Eve only as
+$\pguess = 1-w/2$, which at the observed violation
+$w_{\mathrm{obs}}=\sqrt2-1$ gives $0.793 = \cos^{2}(\pi/8)$ ---
+short of certifying key ($-0.187$ bits): against post-quantum side
+channels, this protocol's violation alone is not enough, even though
+its full behavior is (Sec.~\ref{sec:results-single-setting}). The
+quantum adversary is another story: at level~2 of the hierarchy the
+maximal violation pins a quantum Eve to $\pguess\le 0.5001$, recovering
+the full-data quantum rate of $0.399$ bits, and the certified rate
+stays positive for violations above ${\approx}\,76\%$ of maximal ---
+a genuine one-parameter security curve in the style of
+rate-vs-CHSH plots in device-independent QKD.
+
+\emph{The right inequality always exists.} The contextual-fraction
+witness is a natural choice but not the optimal one. The eavesdropping
+LP's own dual (Sec.~\ref{sec:lp}) hands us, for each protocol, a
+witness with the defining property $\pguess\le\langle c,P\rangle$ for
+every behavior obeying the operational equivalences; constraining Eve
+by \emph{that} inequality at its observed value reproduces the
+full-data rate identically (we verify this self-consistency in the test
+suite). So ``key from one inequality'' is always achievable --- the
+framework tells the experimentalist which inequality to target.
+
+This subsection's analysis is what makes the framework experimentally
+friendly. The idealized operational equivalences a witness presumes
+never hold exactly in the lab, but they can always be manufactured
+exactly in post-processing by Spekkens-style \emph{secondary
+procedures}: small convex mixtures of the performed preparations and
+measurements chosen so the promised equivalences hold by construction,
+as introduced experimentally in Ref.~\cite{Mazurek2016} and developed,
+in contradistinction to cut-to-your-cloth analyses that weaken the
+claim to fit the data, in Ref.~\cite{Zhang2025secondary}. Combined
+with the curves above, an experiment need only (i) lapidate its raw
+data into secondary procedures satisfying the target equivalences and
+(ii) evaluate one linear witness on the result.
+
+\begin{figure}
+\includegraphics[width=\columnwidth]{figures/fig_r6_witness}
+\caption{\label{fig:witness-only}Key rate per key-generating round
+when Eve is constrained only by the operational equivalences and a
+lower bound $w$ on the protocol's contextual-fraction witness, plotted
+against the fraction of the observed violation. Hexagon (operational
+adversary, LP, exact): the full rate is recovered at the observed
+violation. Rotated BB84: the operational adversary is never beaten by
+the violation alone (dashed), but the quantum adversary (SDP level 2,
+certified lower bound) is --- crossing zero near $76\%$ of the maximal
+violation and recovering the full-data quantum rate at maximal
+violation. \todo{Finalize styling; densify the SDP curve.}}
+\end{figure}
 
 \section{Discussion}
 \label{sec:discussion}
