@@ -7,8 +7,7 @@ Nonprojective measurements follow Appendix B's Naimark-unitary construction:
 - Measurement OPEQ constraints in Eq. (10) form
 
 The optimization model is assembled with CVXPY and solved with MOSEK by
-default. The previous raw MOSEK task implementation is preserved in
-``contextualityqkd.eve_sdp_original``.
+default.
 """
 
 from __future__ import annotations
