@@ -49,10 +49,10 @@ ax.plot(x_lp, y_lp, color=VERM, lw=1.4, ls="--", zorder=3,
         label="operational adversary (LP, exact)")
 ax.plot([eta_star], [0.0], marker="|", ms=7, color=VERM, zorder=4)
 ax.annotate(rf"$\eta^*\approx{eta_star:.3f}$", xy=(eta_star, 0.0),
-            xytext=(eta_star - 0.005, 0.09), ha="right", fontsize=7.5, color=VERM)
+            xytext=(eta_star - 0.015, 0.12), ha="right", fontsize=7.5, color=VERM)
 
 ax.set_xlabel(r"preparation visibility $\eta$")
-ax.set_ylabel("key rate per key-generating round (bits)")
+ax.set_ylabel("key rate per key round (bits)")
 ax.set_xlim(0.5, 1.0)
 ax.legend(frameon=False, fontsize=7, loc="upper left")
 fig.tight_layout(pad=0.3)

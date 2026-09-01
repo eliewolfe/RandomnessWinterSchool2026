@@ -355,11 +355,46 @@
    "lp_rate_key_run_RF": -0.04760710613664676
   },
   {
+   "eta": 0.92,
+   "sdp2_guess_raw": 0.6678494810622626,
+   "sdp2_guess_capped": 0.6678494810622626,
+   "sdp2_rate_key_run_RF": -0.00411240464798146,
+   "lp_rate_key_run_RF": -0.017875203831832387
+  },
+  {
+   "eta": 0.94,
+   "sdp2_guess_raw": 0.651762305252191,
+   "sdp2_guess_capped": 0.651762305252191,
+   "sdp2_rate_key_run_RF": 0.04415206847750297,
+   "lp_rate_key_run_RF": 0.012357053297239462
+  },
+  {
    "eta": 0.95,
    "sdp2_guess_raw": 0.6415773080484587,
    "sdp2_guess_capped": 0.6415773080484587,
    "sdp2_rate_key_run_RF": 0.07275991213333122,
    "lp_rate_key_run_RF": 0.02766597035746876
+  },
+  {
+   "eta": 0.96,
+   "sdp2_guess_raw": 0.6294223636443308,
+   "sdp2_guess_capped": 0.6294223636443308,
+   "sdp2_rate_key_run_RF": 0.10543911160512376,
+   "lp_rate_key_run_RF": 0.04310634883287101
+  },
+  {
+   "eta": 0.98,
+   "sdp2_guess_raw": 0.5956335540331437,
+   "sdp2_guess_capped": 0.5956335540331437,
+   "sdp2_rate_key_run_RF": 0.1901591612920952,
+   "lp_rate_key_run_RF": 0.07439091492119898
+  },
+  {
+   "eta": 0.99,
+   "sdp2_guess_raw": 0.5691437509455202,
+   "sdp2_guess_capped": 0.5691437509455202,
+   "sdp2_rate_key_run_RF": 0.25191688156276837,
+   "lp_rate_key_run_RF": 0.09024009682849088
   },
   {
    "eta": 1.0,

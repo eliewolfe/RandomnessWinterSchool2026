@@ -310,30 +310,249 @@ round for the rotated single-setting protocol under preparation
 depolarization with visibility $\eta$. The operational-adversary curve
 (LP) is exact and crosses zero at $\eta^{\ast}\approx0.932$; the
 quantum-adversary curve (SDP hierarchy, level 2) is a certified lower
-bound on the true quantum rate. \todo{Finalize styling.}}
+bound on the true quantum rate, positive already for
+$\eta\gtrsim0.922$. That the two curves coincide for
+$\eta\lesssim0.9$ is a statement about the level-2 relaxation ---
+higher levels can only lower the quantum curve's implied guessing
+bound --- not a proven coincidence of the two adversaries.
+\todo{Finalize styling.}}
 \end{figure}
 
 \subsection{Separating quantum from operational adversaries: the
 $(3,2)$-PORAC}
 \label{sec:results-porac}
 
-\todo{R2: zero OPT rate (LP, exact) vs.\ positive certified quantum
-rate (SDP); comparison with Ref.~\cite{ChaturvediFarkasWright2021};
-rate vs.\ $\eta$; LP-tight vs.\ SDP-hierarchy discussion.}
+Our two adversary classes are not equally powerful, and the
+$(3,2)$-parity-oblivious random access code exhibits the starkest
+possible separation: \emph{zero} key against the operational adversary,
+but a healthy certified rate against the quantum adversary.
+
+In the $(3,2)$-PORAC, Alice receives a uniformly random three-bit
+string $x\in\{0,1\}^{3}$ and sends one system; Bob receives
+$y\in\{1,2,3\}$ and tries to output the $y$-th bit of $x$
+($X{=}8$, $Y{=}3$, binary outcomes). Parity obliviousness --- the
+promise that the transmitted system carries no information about any
+parity of two or more bits of $x$ --- supplies four preparation
+operational equivalences, and the raw key dit for a key round is simply
+the addressed bit $x_{y}$ on Alice's side and Bob's decoded bit on his.
+The optimal quantum strategy decodes with probability
+$\tfrac12(1+\tfrac{1}{\sqrt3})\approx 0.789$, beating the
+parity-oblivious classical maximum of $3/4$
+\cite{ChaturvediFarkasWright2021}; the corresponding
+error-correction cost is $H(K|B,y)\approx 0.744$ bits per round.
+
+Against the operational adversary the protocol is dead on arrival. The
+LP --- which, we stress again, computes Eve's optimal guessing
+probability \emph{exactly} for this adversary class --- returns, for
+every setting,
+\begin{equation}
+  \pguess(y) \;=\; 1-\frac{1}{2\sqrt3}\;\approx\;0.7113 ,
+\end{equation}
+whose reverse-Fano uncertainty falls short of the error-correction
+cost: the key rate is $-0.167$ bits per key round, i.e.\ no key. This
+is a theorem about the protocol, not a limitation of our tooling: some
+operational (post-quantum) side channel consistent with the observed
+PORAC behavior and its parity-obliviousness promise genuinely lets Eve
+guess the addressed bit that often.
+
+The quantum adversary, by contrast, is essentially blind here. Already
+at level~1 of the hierarchy (with the U-only Naimark generator
+reduction of Sec.~\ref{sec:sdp}), the SDP certifies
+\begin{equation}
+  \pguess \;\le\; 0.5002 ,
+\end{equation}
+so a quantum Eve constrained to reproduce the ideal PORAC behavior can
+do essentially no better than a coin flip, and the certified key rate is
+$0.256$ bits per key-generating round ($0.255$ under the more
+conservative min-entropy accounting). This is the framework's headline
+separation: \emph{which theory Eve is allowed to exploit changes the
+verdict on the same protocol from insecure to secure.} Qualitatively
+this matches Ref.~\cite{ChaturvediFarkasWright2021}, which introduced
+the $(3,2)$-PORAC key-distribution scheme and used their SDP hierarchy
+for contextuality scenarios to certify a positive key rate for Bob
+success probabilities above ${\approx}\,0.776$ up to the quantum
+optimum. \todo{Exact quantitative cross-check against
+Ref.~\cite{ChaturvediFarkasWright2021}: their rate is parameterized by
+Bob's success probability alone, ours conditions on the full behavior,
+so ours should certify at least as much key at the same success
+probability. Verify conventions (per key round vs.\ per run, sifting)
+before quoting their numbers in Table form.}
+
+The asymmetry between the two solvers deserves emphasis, because the
+two numbers above have different epistemic standings. The LP value is
+\emph{tight}: it is the exact optimum of Eve's guessing probability
+over all operational attacks, so LP-derived key rates are exact for
+that adversary, and an LP verdict of ``zero key'' is final. The SDP
+value is an \emph{upper bound} on the quantum Eve's guessing
+probability, obtained from a level of an approximation hierarchy in the
+spirit of Refs.~\cite{NPA2008,ChaturvediFarkasWright2021}: it can only
+overestimate Eve, so the key rates it yields are certified lower bounds
+that can improve (never worsen) as the hierarchy level increases, and a
+``zero key'' verdict from the SDP alone is inconclusive. Every quantum
+key-rate curve in this paper is to be read with that one-sidedness in
+mind; conversely, since every quantum attack is an operational attack,
+the LP value always caps the SDP value, and our implementation reports
+the minimum of the two.
+
+Figure~\ref{fig:porac-noise} traces both adversaries under
+depolarization of Alice's preparations with visibility $\eta$ (which
+preserves parity obliviousness). The operational-adversary rate is
+negative across the entire range --- the separation is not an artifact
+of the noiseless point --- while the certified quantum rate remains
+positive down to $\eta^{\ast}\approx 0.944$.
+
+\begin{figure}
+\includegraphics[width=\columnwidth]{figures/fig_r2_porac}
+\caption{\label{fig:porac-noise}Key rate per key-generating round for
+the $(3,2)$-PORAC protocol under preparation depolarization with
+visibility $\eta$. The operational-adversary curve (LP, exact) never
+reaches zero: this protocol certifies no key against post-quantum
+side channels at any noise level. The quantum-adversary curve (SDP,
+level 1) is a certified lower bound on the true quantum rate.
+\todo{Finalize styling.}}
+\end{figure}
 
 \subsection{Designing the key map: nontrivial \wherekey{}}
 \label{sec:results-wherekey}
 
-\todo{R3: protocol where restricting the key-generating $x$'s per $y$
-strictly improves the key rate per experimental run; automatic
-optimizer.}
+In the protocols of the previous subsections every preparation was
+key-generating for every key setting. In general a protocol may declare
+only a subset of preparations key-generating for each setting --- the
+\wherekey{} assignment of Sec.~\ref{sec:keyrates} --- spending the
+remaining $(x,y)$ pairs on parameter estimation. This is a genuine
+design dimension: restricting \wherekey{} lowers the error-correction
+cost per key dit (only well-correlated pairs remain) and typically also
+lowers Eve's conditional guessing advantage, at the price of a smaller
+fraction of key-generating rounds. The correct figure of merit for the
+trade is the key rate \emph{per experimental run}: the per-key-run rate
+discounted by the key-generation probability. Our pipeline optimizes
+\wherekey{} automatically by sweeping thresholded families of
+assignments and keeping the per-experimental-run optimum
+(Sec.~\ref{sec:keyrates}).
+
+Table~\ref{tab:wherekey} shows the effect across our protocol family,
+against the operational adversary (LP, exact). The improvements are far
+from marginal. For the hexagon protocol (six preparations on the
+$X$--$Z$ great circle, three antipodal binary measurements) the trivial
+assignment yields a nearly worthless $0.017$ bits per run: each
+measurement is well correlated with only its own antipodal preparation
+pair, and averaging the honest parties' error-correction cost over all
+six preparations almost erases the key. The optimizer discovers exactly
+the aligned assignment --- each setting keys only on its own antipodal
+pair --- and the rate per experimental run improves tenfold to
+$0.167$ bits, even though only one round in three now generates key.
+The Cabello 18-ray Kochen--Specker protocol is more dramatic still:
+under the trivial assignment the rate is \emph{negative} (no key at
+all), while keying each of the nine contexts on its own four rays
+yields $0.75$ bits per key round, $0.167$ per experimental run. A
+protocol that appears broken can be a well-designed \wherekey{} away
+from working.
+
+\begin{table}
+\caption{\label{tab:wherekey}Key rates against the operational
+adversary (LP, exact; reverse-Fano) under the trivial \wherekey{}
+(all $x$ for every $y$) versus the automatically optimized assignment.
+$p_{\mathrm{key}}$ is the fraction of experimental runs that generate
+key under the optimized assignment. Rates in bits; ``run'' = key rate
+per experimental run, ``key'' = per key-generating round.}
+\begin{ruledtabular}
+\begin{tabular}{lccccc}
+ & \multicolumn{2}{c}{trivial} & \multicolumn{3}{c}{optimized} \\
+protocol & key & run & key & run & $p_{\mathrm{key}}$ \\
+\colrule
+XZ ring $(8,4)$    & $0.107$  & $0.107$  & $0.205$ & $0.154$ & $3/4$ \\
+XZ ring $(12,6)$   & $0.168$  & $0.168$  & $0.493$ & $0.246$ & $1/2$ \\
+XZ ring $(16,8)$   & $0.201$  & $0.201$  & $0.451$ & $0.282$ & $5/8$ \\
+hexagon $(6,3)$    & $0.017$  & $0.017$  & $0.500$ & $0.167$ & $1/3$ \\
+rotated BB84 (\ref{sec:results-single-setting}) & $0.106$ & $0.106$ & $0.106$ & $0.106$ & $1$ \\
+Cabello 18-ray     & $-0.273$ & $-0.273$ & $0.750$ & $0.167$ & $2/9$ \\
+\end{tabular}
+\end{ruledtabular}
+\end{table}
+
+Two structural lessons emerge. First, the optimum is often the
+``aligned'' assignment in which each measurement keys only on the
+preparations it can decode near-deterministically --- but not always:
+in the $(16,8)$ ring the optimizer retains ten of sixteen preparations
+per setting, accepting imperfect correlation in exchange for key-round
+frequency. Second, the rotated-BB84 protocol of
+Sec.~\ref{sec:results-single-setting} shows the optimizer leaving a
+symmetric protocol untouched: when every $(x,y)$ pair is equally good,
+restriction only costs rounds. The \wherekey{} distinction is thus not
+bookkeeping pedantry; it is where protocol design happens in this
+framework.
 
 \subsection{Which operational equivalences power the key?}
 \label{sec:results-opeqs}
 
-\todo{R4: completeness-only measurement operational equivalences
-(the no-signalling analogue) vs.\ the full learned set; classification
-of protocols; contrast with nonlocality-based QKD.}
+Our pipeline learns \emph{all} operational equivalences among Bob's
+effects by linear algebra. But not all of them are created equal. Every
+scenario satisfies the $Y{-}1$ \emph{completeness} relations
+$\sum_{b}e_{b|y}=\sum_{b}e_{b|y'}$ --- the statement that every setting
+has the same unit measurement trace. In the eavesdropping LP these
+relations play exactly the role no-signalling plays in Bell-based key
+distribution: they force each branch of Eve's decomposition to assign
+every measurement the same total weight, which is the entire source of
+Eve's ignorance in nonlocality-based analyses against a
+general-probabilistic adversary. Any \emph{further} identities among
+the effects --- the same effect appearing in two different contexts, a
+Kochen--Specker orthogonality closing a loop --- are promises with no
+Bell-scenario counterpart. It is natural to ask how much of the key
+they are responsible for.
+
+To isolate them, we rerun the analysis on a derived scenario that keeps
+the behavior and all preparation equivalences but \emph{forgets} every
+measurement equivalence beyond completeness. Since this only removes
+constraints from Eve's LP, her guessing probability can only rise;
+the question is by how much. Table~\ref{tab:opeqs} shows the outcome
+across our protocol family.
+
+\begin{table}
+\caption{\label{tab:opeqs}Eve's exact operational-adversary guessing
+probability (LP) with the full learned set of measurement operational
+equivalences versus only the completeness (unit-measurement-trace)
+relations. $N_{\mathrm{meas}}$ counts equivalences (full set
+$\to$ completeness-only). Key rates (reverse-Fano, per key-generating
+round) use each protocol's \wherekey{} of
+Table~\ref{tab:wherekey} (optimized for the hexagon and Cabello;
+trivial elsewhere; rotated BB84 keyed on $y^{\ast}=0$).}
+\begin{ruledtabular}
+\begin{tabular}{lccc}
+protocol & $N_{\mathrm{meas}}$ & $\pguess$ full $\to$ restricted & rate full $\to$ restricted \\
+\colrule
+aligned BB84    & $1\to1$   & $0.750 \to 0.750$ & $0 \to 0$ \\
+rotated BB84    & $1\to1$   & $0.646 \to 0.646$ & $0.106 \to 0.106$ \\
+$(3,2)$-PORAC   & $2\to2$   & $0.711 \to 0.711$ & $<0 \to <0$ \\
+hexagon         & $3\to2$   & $0.750 \to 0.750$ & $0.500 \to 0.500$ \\
+XZ ring $(8,4)$ & $5\to3$   & $0.625 \to 0.625$ & $0.107 \to 0.107$ \\
+Cabello 18-ray  & $26\to8$  & $0.625 \to 0.671$ & $0.750 \to 0.658$ \\
+\end{tabular}
+\end{ruledtabular}
+\end{table}
+
+The table splits the family in two. For every qubit protocol the
+restriction changes \emph{nothing}: in the two-setting scenarios the
+learned set already contains nothing beyond completeness ($Y{-}1=1$),
+and --- more interestingly --- in the hexagon and ring scenarios the
+genuinely nontrivial identities that do exist (the learned set is
+strictly larger than the completeness set) turn out to carry no
+additional constraint on Eve's optimal attack. There, all
+measurement-side security flows through the unit measurement trace,
+just as in nonlocality-based QKD, and the protocols' power over their
+Bell-scenario analogues comes entirely from the preparation
+equivalences. The Cabello 18-ray Kochen--Specker protocol behaves
+differently: eighteen of its twenty-six measurement equivalences are
+genuine ray-sharing identities between contexts, and forgetting them
+lifts Eve's guessing probability from $0.625$ to $0.671$, cutting the
+key rate per key round from $0.750$ to $0.658$ ($0.167\to0.146$ per
+experimental run). Kochen--Specker structure is thus \emph{load-bearing}
+for the key --- though notably not \emph{essential} here, since the
+completeness-only analysis still certifies a healthy positive rate.
+
+\todo{Optional follow-ups: sweep intermediate opeq subsets to locate
+which specific ray-sharing identities carry the Cabello improvement;
+quantum-adversary (SDP) version of the comparison; a protocol where the
+restriction flips the rate's sign, if one exists in a natural family.}
 
 \subsection{Key from a noncontextuality-inequality violation alone}
 \label{sec:results-witness}
