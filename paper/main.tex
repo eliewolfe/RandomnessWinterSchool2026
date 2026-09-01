@@ -1,0 +1,207 @@
+\documentclass[aps,pra,twocolumn,superscriptaddress,longbibliography,nofootinbib]{revtex4-2}
+
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage{amsmath,amssymb,amsthm}
+\usepackage{bm}
+\usepackage{graphicx}
+\usepackage{physics}
+\usepackage{xcolor}
+\usepackage[colorlinks=true,linkcolor=blue,citecolor=blue,urlcolor=blue]{hyperref}
+
+% ---- Convenience macros ----
+\newcommand{\Eve}{\mathrm{E}}
+\newcommand{\Alice}{\mathrm{A}}
+\newcommand{\Bob}{\mathrm{B}}
+\newcommand{\pguess}{P_{\Eve}^{\mathrm{guess}}}
+\newcommand{\wherekey}{\texttt{where\_key}}
+\newcommand{\todo}[1]{\textcolor{red}{[TODO: #1]}}
+
+\begin{document}
+
+\title{Key rates for prepare-and-measure contextuality-based cryptography against operational and quantum entangling-probe adversaries}
+
+\author{Elie Wolfe}
+\affiliation{Perimeter Institute for Theoretical Physics, Waterloo, Ontario, Canada, N2L 2Y5}
+
+\author{Daniel Centeno D\'iaz}
+\affiliation{\todo{affiliation}}
+
+\author{Maria Ciudad Ala\~n\'on}
+\affiliation{\todo{affiliation}}
+
+\author{Pedro Nobrega Lauand}
+\affiliation{\todo{affiliation}}
+
+\author{Roberto Dobal Baldij\~ao}
+\affiliation{\todo{affiliation}}
+
+\author{Yujie Zhang}
+\affiliation{\todo{affiliation}}
+
+\date{\today}
+
+\begin{abstract}
+\todo{Abstract. One-paragraph summary: we quantify the secret-key rates achievable in prepare-and-measure contextuality-based key-distribution protocols against individual entangling-probe attacks with delayed, setting-dependent product measurements. We bound the eavesdropper's guessing probability both when she is constrained only by the operational theory (a linear program) and when she is constrained by quantum theory (a semidefinite program), and we provide an open-source pipeline that converts any such protocol specification into certified key rates together with dual-certificate witness inequalities.}
+\end{abstract}
+
+\maketitle
+
+\section{Introduction}
+\label{sec:intro}
+
+% ------------------------------------------------------------------
+% Paragraph 1: setting and motivation.
+% ------------------------------------------------------------------
+Prepare-and-measure protocols certify secrecy from the structure of the
+observed statistics: Alice prepares one of a set of states labeled
+$x$, Bob measures with a setting $y$ and obtains an outcome $b$, and the
+pair distills a shared secret from the correlations $P(b|x,y)$ together
+with the operational equivalences that the preparations and measurements
+are promised to satisfy. When the statistics witness preparation
+contextuality~\cite{Spekkens2005}, no eavesdropper whose side information
+is mediated by a noncontextual (classical) model can predict the
+outcomes perfectly, and a positive secret-key rate can survive.
+\todo{Expand motivation; cite contextuality-based QKD and randomness
+literature.}
+
+% ------------------------------------------------------------------
+% Paragraph 2: the security paradigm considered in this work.
+% ------------------------------------------------------------------
+In this work we analyze security against \emph{individual
+entangling-probe attacks with delayed, setting-dependent product
+measurements}. In each round, the eavesdropper Eve attaches an ancillary
+probe to the system in transit and lets it interact, but she does not
+measure immediately: she waits until the classical announcement of the
+measurement setting $y$ (and, where relevant, of which rounds are
+key-generating), and only then measures her probe, with a measurement
+that may depend arbitrarily on $y$. Crucially, the attack is
+\emph{individual}: Eve's probe interacts with each round separately and
+is measured with a product (round-by-round) strategy, rather than a
+collective or coherent attack across rounds. Within this paradigm we
+consider two classes of adversary, matched to the two solver backends of
+our accompanying code. The \emph{operational adversary} is constrained
+only by the operational theory reproducing the observed statistics: her
+side information is an arbitrary decomposition of the observed behavior
+into subnormalized behaviors consistent with the promised operational
+equivalences. Bounding this adversary's guessing probability is a linear
+program (LP). The \emph{quantum adversary} is additionally constrained
+by quantum theory: the joint state of message and probe, and Eve's
+setting-dependent probe measurements, must admit a quantum realization.
+Bounding this adversary is a noncommutative polynomial optimization
+problem, which we relax to a semidefinite program (SDP) in the spirit of
+the Navascu\'es--Pironio--Ac\'in hierarchy~\cite{NPA2008}, handling
+nonprojective measurements through an explicit Naimark-unitary
+construction. \todo{Sharpen the formal definitions and point to the
+technical sections.}
+
+% ------------------------------------------------------------------
+% Paragraph 3: from protocols to key rates (the pipeline).
+% ------------------------------------------------------------------
+Our second contribution is a general-purpose, open-source pipeline that
+converts a protocol specification into certified key rates. A protocol
+is specified as a contextuality scenario: a behavior $P(b|x,y)$ (given
+numerically, or generated from quantum states and effects, or from
+states and effects of a generalized probabilistic theory) together with
+its preparation and measurement operational equivalences, which the code
+can also discover automatically. From this data the pipeline computes,
+for each measurement setting $y$, Eve's optimal guessing probability
+$\pguess(\cdot\,|y)$ for the raw key variable---held by Alice or by Bob,
+as configured---under either adversary model, and converts these
+guessing probabilities into uncertainties (min-entropy, or the tighter
+reverse-Fano bound) and thence into asymptotic secret-key rates by
+subtracting the error-correction cost between the honest parties.
+Because every optimization is solved together with its dual, the
+pipeline additionally returns human-readable \emph{witness
+inequalities}: linear functionals of the observed behavior that certify
+the reported bound and expose exactly which features of the statistics
+power the security claim. \todo{Forward-reference the sections deriving
+the LP, the SDP, and the key-rate formulas.}
+
+% ------------------------------------------------------------------
+% Paragraph 4: the where_key distinction and key-rate bookkeeping.
+% ------------------------------------------------------------------
+A structural distinction that our framework makes explicit is
+\emph{which rounds generate key}. In the simplest protocols every
+preparation setting $x$ and every measurement setting $y$ is used to
+establish a key dit, and the key rate per experimental run coincides
+with the key rate per key-generating round. In general, however, a
+protocol may designate only a subset of preparations as key-generating
+for each measurement setting---in our code, a nontrivial \wherekey{}
+assignment listing, for each $y$, the values of $x$ whose rounds
+contribute to the key---with the remaining rounds spent on parameter
+estimation or discarded at sifting. This gives the notion of ``key rate
+per experimental run'' a more nuanced meaning: it is the key rate per
+key-generating round discounted by the fraction of rounds that are
+key-generating at all, and optimizing the choice of \wherekey{} (which
+our pipeline can do automatically) trades the quality of each key dit
+against the rate at which key rounds occur. \todo{Give a small worked
+example contrasting trivial and nontrivial \wherekey{}.}
+
+% ------------------------------------------------------------------
+% Paragraph 5: outline.
+% ------------------------------------------------------------------
+The remainder of the paper is organized as follows.
+Section~\ref{sec:scenarios} fixes notation for contextuality scenarios
+and operational equivalences. Section~\ref{sec:adversaries} formalizes
+the two adversary models and derives the LP and SDP bounds on Eve's
+guessing probability. Section~\ref{sec:keyrates} assembles the key-rate
+formulas and the \wherekey{} bookkeeping. Section~\ref{sec:casestudies}
+applies the pipeline to a collection of protocols, and
+Section~\ref{sec:discussion} concludes.
+
+\section{Contextuality scenarios and operational equivalences}
+\label{sec:scenarios}
+
+\todo{Notation: behaviors $P(b|x,y)$; preparation and measurement
+operational equivalences; noncontextual models; quantum and GPT
+realizations; automatic discovery of equivalences.}
+
+\section{Adversary models}
+\label{sec:adversaries}
+
+\subsection{The operational adversary: a linear program}
+\label{sec:lp}
+
+\todo{Variables $P(b,e|x,y)$; data-consistency, operational-equivalence,
+and positivity constraints; the guessing objective for a configurable
+master-key holder (Alice or Bob); dual witness inequalities and their
+$\ell_2$-refinement.}
+
+\subsection{The quantum adversary: a semidefinite program}
+\label{sec:sdp}
+
+\todo{Entangling probe with delayed setting-dependent product
+measurements; Naimark-unitary treatment of nonprojective measurements;
+moment-matrix relaxation and NPA levels; U-only generator reduction;
+complex-to-real embedding.}
+
+\section{From protocols to key rates}
+\label{sec:keyrates}
+
+\todo{Guessing probability to min-entropy and reverse-Fano uncertainty;
+error-correction cost between the honest parties; key rate per
+key-generating round vs.\ per experimental run; the \wherekey{}
+assignment and its automatic optimization.}
+
+\section{Case studies}
+\label{sec:casestudies}
+
+\todo{BB84; the gbit; the $(3,2)$-PORAC; the 18-ray Cabello and 24-ray
+Peres Kochen--Specker sets; hexagon and XZ-ring families; Bell-local
+probability protocols. Tables of LP vs.\ SDP key rates.}
+
+\section{Discussion}
+\label{sec:discussion}
+
+\todo{Beyond individual attacks; finite-size effects; outlook.}
+
+\begin{acknowledgments}
+\todo{Acknowledgments, including the Randomness Winter School 2026 and
+funding agencies. This research was supported in part by Perimeter
+Institute for Theoretical Physics.}
+\end{acknowledgments}
+
+\bibliography{references}
+
+\end{document}
