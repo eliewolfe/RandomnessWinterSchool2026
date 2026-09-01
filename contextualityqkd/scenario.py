@@ -218,11 +218,61 @@ class ContextualityScenario:
         return ContextualityScenario._format_numeric_entry(value, precision=int(precision))
 
     @lru_cache(maxsize=None)
-    def _compute_dephasing_robustness_cached(self, atol_value: float | None) -> float:
-        """Cached dephasing robustness with default dephasing target."""
-        from .contextuality import contextuality_robustness_to_dephasing
+    def _noncontextuality_assessment_cached(
+        self,
+        atol_value: float | None,
+        monotone: str,
+        backend_solver: str,
+        qp_solver: str = "gurobi",
+    ):
+        """Cached default-target assessment; monotones solve lazily on access."""
+        from .contextuality import NoncontextualityAssessment
 
-        return float(contextuality_robustness_to_dephasing(self, dephasing_target=None, atol=atol_value))
+        return NoncontextualityAssessment(
+            self,
+            monotone=monotone,
+            atol=atol_value,
+            backend_solver=backend_solver,
+            qp_solver=qp_solver,
+        )
+
+    def assess_noncontextuality(
+        self,
+        *,
+        monotone: str = "contextual_fraction",
+        dephasing_target: np.ndarray | None = None,
+        atol: float | None = None,
+        backend_solver: str = "highs",
+        qp_solver: str = "gurobi",
+    ):
+        """Return a NoncontextualityAssessment for this scenario.
+
+        Defaults to the contextual-fraction monotone with the sparse "highs"
+        simplex witness. ``backend_solver`` selects the LP backend ("mosek"/
+        "clarabel" give a symmetric interior-point dual witness; "highs" /
+        "mosek_simplex" give a sparse simplex vertex). ``qp_solver`` selects
+        the backend for the L2 dual-refinement QP that smooths the printed
+        witness (the LP-side raw dual is preserved on ``raw_dual_values``).
+        The default-target assessment is cached per (atol, monotone,
+        backend_solver, qp_solver); a custom ``dephasing_target`` builds a
+        fresh (uncached) assessment.
+        """
+        if dephasing_target is None:
+            atol_key = None if atol is None else float(atol)
+            return self._noncontextuality_assessment_cached(
+                atol_key, monotone, backend_solver, qp_solver,
+            )
+
+        from .contextuality import NoncontextualityAssessment
+
+        return NoncontextualityAssessment(
+            self,
+            monotone=monotone,
+            dephasing_target=dephasing_target,
+            atol=atol,
+            backend_solver=backend_solver,
+            qp_solver=qp_solver,
+        )
 
     def compute_dephasing_robustness(
         self,
@@ -230,58 +280,75 @@ class ContextualityScenario:
         atol: float | None = None,
     ) -> float:
         """Compute contextuality robustness to dephasing."""
-        if dephasing_target is None:
-            atol_key = None if atol is None else float(atol)
-            return float(self._compute_dephasing_robustness_cached(atol_key))
-
-        from .contextuality import contextuality_robustness_to_dephasing
-
-        return float(contextuality_robustness_to_dephasing(self, dephasing_target=dephasing_target, atol=atol))
-
-    @lru_cache(maxsize=None)
-    def _compute_contextual_fraction_cached(self, atol_value: float | None) -> float:
-        """Cached contextual fraction for the scenario."""
-        from .contextuality import contextual_fraction
-
-        return float(contextual_fraction(self, atol=atol_value))
+        return float(
+            self.assess_noncontextuality(dephasing_target=dephasing_target, atol=atol).dephasing_robustness
+        )
 
     def compute_contextual_fraction(self, atol: float | None = None) -> float:
         """Compute contextual fraction."""
-        atol_key = None if atol is None else float(atol)
-        return float(self._compute_contextual_fraction_cached(atol_key))
-
-    @lru_cache(maxsize=None)
-    def _compute_noncontextual_fraction_cached(self, atol_value: float | None) -> float:
-        """Cached noncontextual fraction for the scenario."""
-        from .contextuality import noncontextual_fraction
-
-        return float(noncontextual_fraction(self, atol=atol_value))
+        return float(self.assess_noncontextuality(atol=atol).contextual_fraction)
 
     def compute_noncontextual_fraction(self, atol: float | None = None) -> float:
         """Compute noncontextual fraction."""
-        atol_key = None if atol is None else float(atol)
-        return float(self._compute_noncontextual_fraction_cached(atol_key))
+        return float(self.assess_noncontextuality(atol=atol).noncontextual_fraction)
+
+    def is_contextual(self, atol: float | None = None) -> bool:
+        """Whether the scenario is contextual (contextuality measure exceeds tolerance)."""
+        return bool(self.assess_noncontextuality(atol=atol).contextual)
 
     def print_contextuality_measures(
         self,
         metrics: list[str] | tuple[str, ...] | None = None,
         *,
         precision: int = 3,
+        show_inequalities: bool = True,
+        backend_solver: str = "mosek_simplex",
+        qp_solver: str = "gurobi",
     ) -> None:
-        """Print selected contextuality measures."""
-        metric_list = ["dephasing_robustness", "contextual_fraction"] if metrics is None else list(metrics)
+        """Print selected contextuality measures, optionally with dual witnesses.
+
+        When ``show_inequalities=True`` the printed witness coefficients come
+        from the QP-refined (minimum-L2-norm) point of the optimal dual face;
+        ``qp_solver`` selects its backend.
+        """
+        metric_list = ["contextual_fraction"] if metrics is None else list(metrics)
         canonical_metrics = [self._normalize_contextuality_metric_name(metric) for metric in metric_list]
+        # If the user requested both monotones, configure the assessment to
+        # solve both — otherwise the witness lookup for the second one would
+        # miss the dict produced by the (single-monotone) assessment.
+        monotone_set = {m for m in canonical_metrics if m in {"contextual_fraction", "dephasing_robustness"}}
+        if "contextual_fraction" in monotone_set and "dephasing_robustness" in monotone_set:
+            assessment_monotone = "both"
+        elif "dephasing_robustness" in monotone_set:
+            assessment_monotone = "dephasing_robustness"
+        else:
+            assessment_monotone = "contextual_fraction"
+        assessment = self.assess_noncontextuality(
+            monotone=assessment_monotone, backend_solver=backend_solver, qp_solver=qp_solver,
+        )
         print("\nMeasures of Contextuality (closer to 1 means more contextual):")
         for metric in canonical_metrics:
             if metric == "dephasing_robustness":
-                value = self.compute_dephasing_robustness()
-                print(f"dephasing robustness = {self._format_numeric_entry(value, precision=precision)}")
+                value, label, monotone = assessment.dephasing_robustness, "dephasing robustness", "dephasing_robustness"
             elif metric == "contextual_fraction":
-                value = self.compute_contextual_fraction()
-                print(f"contextual fraction = {self._format_numeric_entry(value, precision=precision)}")
+                value, label, monotone = assessment.contextual_fraction, "contextual fraction", "contextual_fraction"
             elif metric == "noncontextual_fraction":
-                value = self.compute_noncontextual_fraction()
-                print(f"noncontextual fraction = {self._format_numeric_entry(value, precision=precision)}")
+                value, label, monotone = assessment.noncontextual_fraction, "noncontextual fraction", None
+            print(f"{label} = {self._format_numeric_entry(value, precision=precision)}")
+            if show_inequalities and monotone is not None:
+                self._print_noncontextuality_inequality(assessment, monotone, precision=precision)
+
+    def _print_noncontextuality_inequality(self, assessment, monotone: str, *, precision: int = 3) -> None:
+        """Print one monotone's dual noncontextuality inequality, grouped by coefficient."""
+        from .cvxpy_utils import format_coefficient_groups
+
+        coeffs = assessment.inequality[monotone]
+        violation = assessment.violation[monotone]
+        print(
+            f"  noncontextuality inequality  sum_xyb c(x,y,b) P(b|x,y) <= 0  "
+            f"(violated by {self._format_numeric_entry(violation, precision=precision)}); coefficients c:"
+        )
+        print(format_coefficient_groups(coeffs, precision=precision, indent="    "))
 
     @cached_property
     def data_numeric(self) -> np.ndarray:

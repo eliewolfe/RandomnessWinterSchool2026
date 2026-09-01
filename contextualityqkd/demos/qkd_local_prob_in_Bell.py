@@ -90,7 +90,21 @@ def build_icosahedron_dodecahedron_scenario(*, eta: float = 1.0) -> QuantumConte
 def main() -> None:
     np.set_printoptions(precision=6, suppress=True)
     scenario = build_icosahedron_dodecahedron_scenario(eta=1.0)
-    protocol = ContextualityProtocol(scenario, where_key=None)
+    protocol = ContextualityProtocol(
+        scenario=scenario,
+        where_key=None,
+        master_key_holder="Alice",
+        atol=1e-9,
+        lp_solver="mosek_simplex",
+        sdp_solver="MOSEK",
+        sdp_projective_bob=False,
+        sdp_projective_eve=False,
+        sdp_npa_level_bob=1,
+        sdp_npa_level_eve=1,
+        sdp_use_u_only=True,
+        sdp_threads=None,
+        sdp_verbose=0,
+    )
 
     ContextualityScenario.print_title("QKD Protocol: icosahedron_dodecahedron (ideal noiseless case)")
 
@@ -98,21 +112,35 @@ def main() -> None:
 
     print("\nOperational equivalences:")
     scenario.print_operational_equivalences(precision=3, representation="symbolic")
+    scenario.print_contextuality_measures(metrics=["contextual_fraction"], precision=3, show_inequalities=True, backend_solver="mosek_simplex")
 
     protocol.print_alice_guessing_metrics()
     protocol.print_alice_uncertainty_metrics()
-    protocol.print_eve_guessing_metrics_lp()
-    protocol.print_eve_uncertainty_metrics_reverse_fano_lp()
-    protocol.print_key_rate_summary_reverse_fano_lp()
-
-    auto_protocol = ContextualityProtocol(
-        scenario,
-        where_key="Automatic",
-        optimize_verbose=True,
+    protocol.print_eve_security_metrics(
+        method="both",
+        rate_type="reverse_fano",
+        include_per_y_lp=False,
+        precision_vector=3,
+        precision_scalar=6,
+        leading_newline=True,
     )
-    auto_protocol.print_where_key_optimization_best_stage(leading_newline=True)
+    protocol.print_eve_guess_upper_bound_inequality_by_y()
+    protocol.print_eve_guess_upper_bound_inequality()
 
-    scenario.print_contextuality_measures(precision=3)
+    # auto_protocol = ContextualityProtocol(
+    #     scenario=scenario,
+    #     where_key="Automatic",
+    #     master_key_holder="Alice",
+    #     atol=1e-9,
+    #     optimize_cluster_tolerance=1e-6,
+    #     optimize_cluster_by="threshold_uncertainty",
+    #     optimize_tie_break="earliest_optimal_stage",
+    #     sdp_npa_level_bob=1,
+    #     sdp_npa_level_eve=1,
+    #     sdp_threads=None,
+    #     sdp_verbose=0,
+    # )
+    # auto_protocol.print_where_key_optimization_best_stage(leading_newline=True)
 
 
 if __name__ == "__main__":

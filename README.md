@@ -59,6 +59,15 @@ protocol = ContextualityProtocol(
 
 Set `master_key_holder="Bob"` to recover the older Bob-held-key convention.
 
+### SDP speed knob (now defaulted)
+
+`ContextualityProtocol` exposes `sdp_use_u_only` (default `True`).
+
+- `True`: build NPA words from `U` generators only (dagger words are still handled via moment-entry identities), usually much faster in nonprojective runs.
+- `False`: use both `U` and `U†` as explicit generators (larger SDP).
+
+If `sdp_use_u_only=True` fails (e.g., infeasible relaxation on a specific scenario), the protocol layer retries once with full `U/U†` generators.
+
 ## 2) Automatic `where_key` optimization (built in)
 
 Use this to automatically sweep admissible key sets and choose the best stage by reverse-Fano bits per experimental run:
@@ -177,7 +186,8 @@ What it does:
 
 - builds true quantum PORAC scenario via `QuantumContextualityScenario.from_quantum_states_effects`
 - validates discovered preparation-OPEQ subspace against article constraints
-- runs baseline protocol with `where_key=None`
+- runs baseline protocol with `where_key=None` on the nonprojective Naimark pathway (`sdp_projective_bob=False`, `sdp_projective_eve=False`)
+- enables `sdp_use_u_only=True` to keep the nonprojective SDP tractable
 - runs automatic optimization stage and prints best-stage summary
 
 ## Running
@@ -237,7 +247,10 @@ protocol.print_key_rate_summary_reverse_fano_lp()
 - `contextualityqkd/quantum.py`: GPT/quantum scenario classes and factory constructors
 - `contextualityqkd/protocol.py`: protocol metrics, LP-derived key rates, automatic optimizer
 - `contextualityqkd/contextuality.py`: contextuality LP metrics (contextual fraction, robustness)
-- `contextualityqkd/randomness_lp.py`: Eve LP backend
+- `contextualityqkd/eve_lp.py`: Eve LP backend (CVXPY, dual witnesses)
+- `contextualityqkd/eve_sdp.py`: Eve SDP backend (CVXPY, Naimark-unitary pathway)
+- `contextualityqkd/dual_refinement.py`: minimum-L2-norm refinement of LP dual certificates
+- `contextualityqkd/cvxpy_utils.py`: shared CVXPY backend/dual helpers
 - `contextualityqkd/demos/`: five maintained demos listed above
 
 ## Dependencies
@@ -253,5 +266,10 @@ Core runtime dependencies include:
 - `numba`
 - `networkx`
 - `tqdm`
+- `cvxpy`
+
+Optional: `gurobipy` (install extra `gurobi`) enables the Gurobi LP/QP backends; without it
+the solvers fall back to MOSEK/OSQP/Clarabel/SCS. Test dependencies (`pytest`) live in the
+`dev` dependency group.
 
 See `pyproject.toml` / `requirements.txt` for full dependency declarations.

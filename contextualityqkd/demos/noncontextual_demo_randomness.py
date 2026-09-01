@@ -2,11 +2,11 @@
 from __future__ import annotations
 from pathlib import Path
 import sys
-import sympy as sp
-
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
+
+import sympy as sp
 import numpy as np
 from contextualityqkd.protocol import ContextualityProtocol
 from contextualityqkd.quantum import GPTContextualityScenario, QuantumContextualityScenario
@@ -48,12 +48,22 @@ scenario = GPTContextualityScenario(
     verbose=True)
 
 protocol = ContextualityProtocol(
-    scenario,
-    where_key=None, # where_key=None → all x for every y
-    master_key_holder="Bob")
+    scenario=scenario,
+    where_key=None,  # where_key=None → all x for every y
+    master_key_holder="Bob",
+    atol=1e-9,
+    lp_solver="mosek_simplex",
+)
+scenario.print_contextuality_measures(metrics=["contextual_fraction"], precision=3, show_inequalities=True, backend_solver="mosek_simplex")
 protocol.print_alice_guessing_metrics()
 protocol.print_alice_uncertainty_metrics()
-protocol.print_eve_guessing_metrics_lp()
-protocol.print_eve_uncertainty_metrics_reverse_fano_lp()
-protocol.print_key_rate_summary_reverse_fano_lp()
-scenario.print_contextuality_measures(precision=3)
+protocol.print_eve_security_metrics(
+    method="lp",
+    rate_type="reverse_fano",
+    include_per_y_lp=False,
+    precision_vector=3,
+    precision_scalar=6,
+    leading_newline=True,
+)
+protocol.print_eve_guess_upper_bound_inequality_by_y()
+protocol.print_eve_guess_upper_bound_inequality()

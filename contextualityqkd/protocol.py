@@ -7,10 +7,17 @@ from functools import cached_property
 import math
 from typing import Literal, Sequence
 
+from methodtools import lru_cache
 import numpy as np
 
-from .randomness_lp import _solve_eve_guess_key_by_y_lp_hotstart
+from .eve_lp import QKDNoncontextualLP
+from .eve_sdp import QKDNoncontextualSDP
 from .scenario import ContextualityScenario
+
+
+SolverMethod = Literal["lp", "sdp"]
+ReportingMethod = Literal["lp", "sdp", "both"]
+RateType = Literal["reverse_fano", "min_entropy"]
 
 
 class ContextualityProtocol:
@@ -38,6 +45,18 @@ class ContextualityProtocol:
             "earliest_optimal_stage",
             "latest_optimal_stage",
         ] = "earliest_optimal_stage",
+        sdp_projective_bob: bool = False,
+        sdp_projective_eve: bool = False,
+        sdp_npa_level_bob: int = 1,
+        sdp_npa_level_eve: int = 1,
+        sdp_use_u_only: bool = True,
+        sdp_threads: int | None = None,
+        sdp_solver: str = "MOSEK",
+        sdp_verbose: int | bool = 0,
+        lp_solver: str = "mosek_simplex",
+        lp_threads: int | None = None,
+        lp_verbose: int | bool = 0,
+        qp_solver: str = "gurobi",
     ) -> None:
         if not isinstance(scenario, ContextualityScenario):
             raise TypeError("scenario must be a ContextualityScenario instance.")
@@ -47,6 +66,18 @@ class ContextualityProtocol:
             raise ValueError("atol must be nonnegative.")
         self._where_key_optimization_result = None
         self.master_key_holder = self._canonicalize_master_key_holder(master_key_holder)
+        self.sdp_projective_bob = bool(sdp_projective_bob)
+        self.sdp_projective_eve = bool(sdp_projective_eve)
+        self.sdp_npa_level_bob = int(sdp_npa_level_bob)
+        self.sdp_npa_level_eve = int(sdp_npa_level_eve)
+        self.sdp_use_u_only = bool(sdp_use_u_only)
+        self.sdp_threads = None if sdp_threads is None else int(sdp_threads)
+        self.sdp_solver = str(sdp_solver)
+        self.sdp_verbose = int(sdp_verbose)
+        self.lp_solver = str(lp_solver)
+        self.lp_threads = None if lp_threads is None else int(lp_threads)
+        self.lp_verbose = int(lp_verbose)
+        self.qp_solver = str(qp_solver)
 
         if isinstance(where_key, str):
             token = where_key.strip().lower()
@@ -84,6 +115,33 @@ class ContextualityProtocol:
         raise ValueError("master_key_holder must be 'Alice' or 'Bob'.")
 
     @staticmethod
+    def _canonicalize_reporting_method(method: ReportingMethod | str) -> ReportingMethod:
+        token = str(method).strip().lower()
+        if token == "lp":
+            return "lp"
+        if token == "sdp":
+            return "sdp"
+        if token == "both":
+            return "both"
+        raise ValueError("method must be 'lp', 'sdp', or 'both'.")
+
+    @classmethod
+    def _expand_reporting_methods(cls, method: ReportingMethod | str) -> tuple[SolverMethod, ...]:
+        canonical = cls._canonicalize_reporting_method(method)
+        if canonical == "both":
+            return ("lp", "sdp")
+        return (canonical,)
+
+    @staticmethod
+    def _canonicalize_rate_type(rate_type: RateType | str) -> RateType:
+        token = str(rate_type).strip().lower()
+        if token == "reverse_fano":
+            return "reverse_fano"
+        if token == "min_entropy":
+            return "min_entropy"
+        raise ValueError("rate_type must be 'reverse_fano' or 'min_entropy'.")
+
+    @staticmethod
     def reverse_fano_bound(p_guess: float) -> float:
         """Return a lower bound on conditional Shannon entropy in bits from guessing probability."""
         p = float(p_guess)
@@ -98,6 +156,20 @@ class ContextualityProtocol:
     def min_entropy(p_guess: float) -> float:
         """Return min-entropy in bits from guessing probability."""
         return float(-math.log2(float(p_guess)))
+
+    @classmethod
+    def uncertainty_from_guess(
+        cls,
+        p_guess: float,
+        *,
+        rate_type: Literal["reverse_fano", "min_entropy"] = "reverse_fano",
+    ) -> float:
+        """Convert a guessing probability into an Eve uncertainty bound."""
+        if rate_type == "reverse_fano":
+            return float(cls.reverse_fano_bound(p_guess))
+        if rate_type == "min_entropy":
+            return float(cls.min_entropy(p_guess))
+        raise ValueError("rate_type must be 'reverse_fano' or 'min_entropy'.")
 
     @staticmethod
     def binary_entropy(probability: float, atol: float = 1e-12) -> float:
@@ -651,16 +723,26 @@ class ContextualityProtocol:
         return float(total / float(self.key_pair_count_total))
 
     @cached_property
+    def eve_key_lp_solver(self) -> QKDNoncontextualLP:
+        """Solved Eve LP for Alice as the master-key holder."""
+        solver = QKDNoncontextualLP(
+            self.scenario,
+            master_key_holder="Alice",
+            where_key=self.where_key,
+            threads=self.lp_threads,
+            backend_solver=self.lp_solver,
+            qp_solver=self.qp_solver,
+            atol=self.atol,
+            verbose=self.lp_verbose,
+        )
+        solver.solve_lp()
+        return solver
+
+    @cached_property
     def eve_guess_key_by_y_lp(self) -> np.ndarray:
         """Eve LP-optimal key-guessing probabilities per y (NaN for empty key rows)."""
-        return np.asarray(
-            _solve_eve_guess_key_by_y_lp_hotstart(
-                scenario=self.scenario,
-                where_key=self.where_key,
-                master_key="Alice"
-            ),
-            dtype=float,
-        )
+        assert self.eve_key_lp_solver.eve_guess_by_y is not None
+        return np.asarray(self.eve_key_lp_solver.eve_guess_by_y, dtype=float)
 
     @cached_property
     def eve_guess_key_average_y_lp(self) -> float:
@@ -668,16 +750,26 @@ class ContextualityProtocol:
         return float(self._average_over_y(self.eve_guess_key_by_y_lp, y_distribution=None, skip_nan=True))
 
     @cached_property
+    def eve_bob_lp_solver(self) -> QKDNoncontextualLP:
+        """Solved Eve LP for Bob as the master-key holder."""
+        solver = QKDNoncontextualLP(
+            self.scenario,
+            master_key_holder="Bob",
+            where_key=self.where_key,
+            threads=self.lp_threads,
+            backend_solver=self.lp_solver,
+            qp_solver=self.qp_solver,
+            atol=self.atol,
+            verbose=self.lp_verbose,
+        )
+        solver.solve_lp()
+        return solver
+
+    @cached_property
     def eve_guess_bob_by_y_lp(self) -> np.ndarray:
         """Eve LP-optimal Bob-guessing probabilities per y (NaN for empty key rows)."""
-        return np.asarray(
-            _solve_eve_guess_key_by_y_lp_hotstart(
-                scenario=self.scenario,
-                where_key=self.where_key,
-                master_key="Bob"
-            ),
-            dtype=float,
-        )
+        assert self.eve_bob_lp_solver.eve_guess_by_y is not None
+        return np.asarray(self.eve_bob_lp_solver.eve_guess_by_y, dtype=float)
 
     @cached_property
     def eve_guess_bob_average_y_lp(self) -> float:
@@ -721,21 +813,113 @@ class ContextualityProtocol:
         )
 
     @cached_property
+    def eve_master_key_lp_solver(self) -> QKDNoncontextualLP:
+        """Solved Eve LP for the configured master-key holder."""
+        return self.eve_key_lp_solver if self.master_key_holder == "Alice" else self.eve_bob_lp_solver
+
+    @cached_property
     def eve_guess_master_key_by_y_lp(self) -> np.ndarray:
         """Eve LP-optimal guessing probabilities for the configured master key holder."""
-        return np.asarray(
-            _solve_eve_guess_key_by_y_lp_hotstart(
-                scenario=self.scenario,
-                where_key=self.where_key,
-                master_key=self.master_key_holder,
-            ),
-            dtype=float,
-        )
+        assert self.eve_master_key_lp_solver.eve_guess_by_y is not None
+        return np.asarray(self.eve_master_key_lp_solver.eve_guess_by_y, dtype=float)
 
     @cached_property
     def eve_guess_master_key_average_y_lp(self) -> float:
         """Uniform average of Eve LP guess probabilities for the configured master key holder."""
         return float(self._average_over_y(self.eve_guess_master_key_by_y_lp, y_distribution=None, skip_nan=True))
+
+    @cached_property
+    def eve_guess_master_key_upper_bound_coeffs(self) -> np.ndarray:
+        """Coefficients ``c(x,y,b)`` of a linear upper bound on Eve's average guess.
+
+        Each solved per-y LP dual gives ``P_guess(y) <= <c_y, P(b|x,y)>``. Their
+        uniform mean over solved y (matching ``eve_guess_master_key_average_y_lp``)
+        yields ``avg_y P_guess(y) <= <c, P(b|x,y)>``, tight at the observed data.
+        """
+        per_y = self.eve_master_key_lp_solver.guess_bound_coeffs_by_y
+        shape = (
+            self.scenario.X_cardinality,
+            self.scenario.Y_cardinality,
+            self.scenario.B_cardinality,
+        )
+        if not per_y:
+            return np.zeros(shape, dtype=float)
+        return np.mean(np.stack(list(per_y.values()), axis=0), axis=0)
+
+    @cached_property
+    def eve_guess_master_key_upper_bound_value(self) -> float:
+        """Value of the aggregated guessing-bound inequality at the observed data."""
+        coeffs = self.eve_guess_master_key_upper_bound_coeffs
+        data = np.asarray(self.scenario.data_numeric, dtype=float)
+        return float(np.sum(coeffs * data))
+
+    def _format_guess_bound_inequality_section(
+        self,
+        *,
+        coeffs: np.ndarray,
+        bound: float,
+        lhs_expression: str,
+        title: str,
+        precision: int,
+    ) -> str:
+        """Render one ``LHS <= sum c(x,y,b) P(b|x,y) = bound`` block with grouped coefficients."""
+        from .cvxpy_utils import format_coefficient_groups
+
+        header = (
+            f"{title} (held by {self.master_key_holder}, LP dual):\n"
+            f"  {lhs_expression}  <=  sum_xyb c(x,y,b) P(b|x,y)  =  "
+            f"{ContextualityScenario.format_numeric(bound, precision=precision)}\n"
+            f"  coefficients c:"
+        )
+        return header + "\n" + format_coefficient_groups(coeffs, precision=precision, indent="    ")
+
+    def format_eve_guess_upper_bound_inequality(self, *, precision: int = 4) -> str:
+        """Render the aggregated linear upper bound on Eve's average guess prob."""
+        return self._format_guess_bound_inequality_section(
+            coeffs=self.eve_guess_master_key_upper_bound_coeffs,
+            bound=self.eve_guess_master_key_upper_bound_value,
+            lhs_expression="avg_y P_E^guess(master_key|y)",
+            title="Eve average guessing-probability upper bound",
+            precision=precision,
+        )
+
+    def print_eve_guess_upper_bound_inequality(self, *, precision: int = 4, leading_newline: bool = True) -> None:
+        """Print the aggregated linear upper bound on Eve's average guessing probability."""
+        prefix = "\n" if leading_newline else ""
+        print(prefix + self.format_eve_guess_upper_bound_inequality(precision=precision))
+
+    def format_eve_guess_upper_bound_inequality_by_y(self, *, precision: int = 4) -> str:
+        """Render one linear upper-bound inequality per solved Bob setting ``y``.
+
+        Each section is the per-y analog of
+        :meth:`format_eve_guess_upper_bound_inequality`, built from that y's LP
+        dual ``c_y(x,y',b) >= 0`` so the inequality
+        ``P_E^guess(master_key|y) <= sum_{x,y',b} c_y(x,y',b) P(b|x,y')`` is tight
+        at the observed data.
+        """
+        per_y = self.eve_master_key_lp_solver.guess_bound_coeffs_by_y
+        guesses = self.eve_guess_master_key_by_y_lp
+        sections = [
+            self._format_guess_bound_inequality_section(
+                coeffs=per_y[y],
+                bound=float(guesses[y]),
+                lhs_expression=f"P_E^guess(master_key|y={y})",
+                title=f"Eve guessing-probability upper bound at y={y}",
+                precision=precision,
+            )
+            for y in sorted(per_y)
+        ]
+        return "\n\n".join(sections)
+
+    def print_eve_guess_upper_bound_inequality_by_y(
+        self,
+        *,
+        precision: int = 4,
+        leading_newline: bool = True,
+    ) -> None:
+        """Print the per-y linear upper-bound inequalities on Eve's guessing probability."""
+        prefix = "\n" if leading_newline else ""
+        print(prefix + self.format_eve_guess_upper_bound_inequality_by_y(precision=precision))
 
     @cached_property
     def eve_uncertainty_master_key_min_entropy_by_y_lp(self) -> np.ndarray:
@@ -783,6 +967,246 @@ class ContextualityProtocol:
     def other_party_uncertainty_by_y(self) -> np.ndarray:
         """Other-party uncertainty about the key, chosen to match the configured master key holder."""
         return self.bob_uncertainty_key_by_y if self.master_key_holder == "Alice" else self.alice_uncertainty_bob_by_y_key
+
+    @cached_property
+    def other_party_uncertainty_key_weighted(self) -> float:
+        """Other-party uncertainty averaged over key-eligible ``(x,y)`` pairs."""
+        if self.key_pair_count_total == 0:
+            return float("nan")
+        if self.master_key_holder == "Bob":
+            return float(self.alice_uncertainty_bob_key_weighted)
+        weights = self.key_counts_by_y.astype(float)
+        values = np.asarray(self.bob_uncertainty_key_by_y, dtype=float)
+        return float(np.dot(weights, values) / float(np.sum(weights)))
+
+    @cached_property
+    def eve_sdp_solver(self) -> QKDNoncontextualSDP:
+        """Solved Eve SDP for the configured master-key holder and key subset."""
+        solver = QKDNoncontextualSDP(
+            self.scenario,
+            projective_bob=self.sdp_projective_bob,
+            projective_eve=self.sdp_projective_eve,
+            npa_level_bob=self.sdp_npa_level_bob,
+            npa_level_eve=self.sdp_npa_level_eve,
+            use_u_only=self.sdp_use_u_only,
+            master_key_holder=self.master_key_holder,
+            where_key=self.where_key,
+            threads=self.sdp_threads,
+            solver=self.sdp_solver,
+            atol=self.atol,
+            verbose=self.sdp_verbose,
+        )
+        try:
+            solver.solve_sdp()
+        except (AssertionError, RuntimeError):
+            if not self.sdp_use_u_only:
+                raise
+            # U-only is the default fast path, but some scenarios can become
+            # infeasible under that relaxation; retry once with full generators.
+            if self.sdp_verbose:
+                print("[protocol] U-only SDP failed; retrying with full U/U-dagger generator set.")
+            solver = QKDNoncontextualSDP(
+                self.scenario,
+                projective_bob=self.sdp_projective_bob,
+                projective_eve=self.sdp_projective_eve,
+                npa_level_bob=self.sdp_npa_level_bob,
+                npa_level_eve=self.sdp_npa_level_eve,
+                use_u_only=False,
+                master_key_holder=self.master_key_holder,
+                where_key=self.where_key,
+                threads=self.sdp_threads,
+                solver=self.sdp_solver,
+                atol=self.atol,
+                verbose=self.sdp_verbose,
+            )
+            solver.solve_sdp()
+        return solver
+
+    def _lp_guess_vector_for_holder(self, holder: Literal["Alice", "Bob"]) -> np.ndarray:
+        return self.eve_guess_key_by_y_lp if holder == "Alice" else self.eve_guess_bob_by_y_lp
+
+    def _lp_guess_average_for_holder(self, holder: Literal["Alice", "Bob"]) -> float:
+        return self.eve_guess_key_average_y_lp if holder == "Alice" else self.eve_guess_bob_average_y_lp
+
+    def _lp_uncertainty_vector_for_holder(
+        self,
+        holder: Literal["Alice", "Bob"],
+        *,
+        rate_type: RateType,
+    ) -> np.ndarray:
+        if rate_type == "reverse_fano":
+            return (
+                self.eve_uncertainty_key_reverse_fano_by_y_lp
+                if holder == "Alice"
+                else self.eve_uncertainty_bob_reverse_fano_by_y_lp
+            )
+        return (
+            self.eve_uncertainty_key_min_entropy_by_y_lp
+            if holder == "Alice"
+            else self.eve_uncertainty_bob_min_entropy_by_y_lp
+        )
+
+    def _lp_uncertainty_average_for_holder(
+        self,
+        holder: Literal["Alice", "Bob"],
+        *,
+        rate_type: RateType,
+    ) -> float:
+        if rate_type == "reverse_fano":
+            return (
+                self.eve_uncertainty_key_reverse_fano_average_y_lp
+                if holder == "Alice"
+                else self.eve_uncertainty_bob_reverse_fano_average_y_lp
+            )
+        return (
+            self.eve_uncertainty_key_min_entropy_average_y_lp
+            if holder == "Alice"
+            else self.eve_uncertainty_bob_min_entropy_average_y_lp
+        )
+
+    @lru_cache(maxsize=None)
+    def eve_guessing_metrics(
+        self,
+        *,
+        method: ReportingMethod = "both",
+        include_per_y_lp: bool = False,
+    ) -> tuple[dict[str, object], ...]:
+        """Return cached Eve guessing-metric blocks for LP/SDP reporting."""
+        blocks: list[dict[str, object]] = []
+        for one_method in self._expand_reporting_methods(method):
+            if one_method == "lp":
+                blocks.append(
+                    {
+                        "method": "lp",
+                        "master_key_holder": self.master_key_holder,
+                        "average": float(self.eve_guess_master_key_average_y_lp),
+                        "per_y": (
+                            np.asarray(self.eve_guess_master_key_by_y_lp, dtype=float).copy()
+                            if include_per_y_lp
+                            else None
+                        ),
+                    }
+                )
+                continue
+            blocks.append(
+                {
+                    "method": "sdp",
+                    "master_key_holder": self.master_key_holder,
+                    "average": float(self.eve_guess_master_key_sdp),
+                    "per_y": None,
+                }
+            )
+        return tuple(blocks)
+
+    @cached_property
+    def eve_guess_master_key_sdp(self) -> float:
+        """Eve SDP-optimal average guessing probability over key-eligible pairs."""
+        if self.key_pair_count_total == 0:
+            return float("nan")
+        raw_sdp = float(self.eve_sdp_solver.eve_success_probability)
+        # Quantum attacks are contained in the LP attack model. If a chosen SDP
+        # relaxation is looser, report the tighter known LP cap at protocol level.
+        return float(min(raw_sdp, self.eve_guess_master_key_average_y_lp))
+
+    def eve_uncertainty_master_key_sdp(
+        self,
+        *,
+        rate_type: RateType = "reverse_fano",
+    ) -> float:
+        """Eve uncertainty lower bound from the SDP guessing probability."""
+        sdp_value = float(self.uncertainty_from_guess(self.eve_guess_master_key_sdp, rate_type=rate_type))
+        if rate_type == "reverse_fano":
+            lp_floor = float(self.eve_uncertainty_master_key_reverse_fano_average_y_lp)
+        elif rate_type == "min_entropy":
+            lp_floor = float(self.eve_uncertainty_master_key_min_entropy_average_y_lp)
+        else:
+            raise ValueError("rate_type must be 'reverse_fano' or 'min_entropy'.")
+        # LP provides a valid outer-model bound, so protocol-level SDP reporting
+        # should never be weaker than the LP uncertainty at the same rate type.
+        return float(max(sdp_value, lp_floor))
+
+    def key_rate_per_key_run_sdp(
+        self,
+        *,
+        rate_type: RateType = "reverse_fano",
+    ) -> float:
+        """Average key bits per key-generating run from the SDP Eve bound."""
+        if self.key_pair_count_total == 0:
+            return float("nan")
+        return float(self.eve_uncertainty_master_key_sdp(rate_type=rate_type) - self.other_party_uncertainty_key_weighted)
+
+    def key_rate_per_experimental_run_sdp(
+        self,
+        *,
+        rate_type: RateType = "reverse_fano",
+    ) -> float:
+        """Average key bits per experimental run from the SDP Eve bound."""
+        if self.key_pair_count_total == 0:
+            return 0.0
+        return float(self.key_generation_probability_per_run * self.key_rate_per_key_run_sdp(rate_type=rate_type))
+
+    def eve_guessing_probability(
+        self,
+        *,
+        method: SolverMethod = "lp",
+    ) -> float:
+        """Return Eve's configured-master-key guessing probability."""
+        if method == "lp":
+            return float(self.eve_guess_master_key_average_y_lp)
+        if method == "sdp":
+            return float(self.eve_guess_master_key_sdp)
+        raise ValueError("method must be 'lp' or 'sdp'.")
+
+    def eve_uncertainty(
+        self,
+        *,
+        method: SolverMethod = "lp",
+        rate_type: RateType = "reverse_fano",
+    ) -> float:
+        """Return Eve's uncertainty bound for LP or SDP security assumptions."""
+        if method == "lp":
+            if rate_type == "reverse_fano":
+                return float(self.eve_uncertainty_master_key_reverse_fano_average_y_lp)
+            if rate_type == "min_entropy":
+                return float(self.eve_uncertainty_master_key_min_entropy_average_y_lp)
+            raise ValueError("rate_type must be 'reverse_fano' or 'min_entropy'.")
+        if method == "sdp":
+            return float(self.eve_uncertainty_master_key_sdp(rate_type=rate_type))
+        raise ValueError("method must be 'lp' or 'sdp'.")
+
+    def key_rate_per_key_run(
+        self,
+        *,
+        method: SolverMethod = "lp",
+        rate_type: RateType = "reverse_fano",
+    ) -> float:
+        """Return key bits per key-generating run for LP or SDP Eve assumptions."""
+        if method == "lp":
+            if rate_type == "reverse_fano":
+                return float(self.key_rate_per_key_run_reverse_fano_lp)
+            if rate_type == "min_entropy":
+                return float(self.key_rate_per_key_run_min_entropy_lp)
+            raise ValueError("rate_type must be 'reverse_fano' or 'min_entropy'.")
+        if method == "sdp":
+            return float(self.key_rate_per_key_run_sdp(rate_type=rate_type))
+        raise ValueError("method must be 'lp' or 'sdp'.")
+
+    def key_rate_per_experimental_run(
+        self,
+        *,
+        method: SolverMethod = "lp",
+        rate_type: RateType = "reverse_fano",
+    ) -> float:
+        """Return key bits per experimental run for LP or SDP Eve assumptions."""
+        if method == "lp":
+            if rate_type == "reverse_fano":
+                return float(self.key_rate_per_experimental_run_reverse_fano_lp)
+            if rate_type == "min_entropy":
+                return float(self.key_rate_per_experimental_run_min_entropy_lp)
+            raise ValueError("rate_type must be 'reverse_fano' or 'min_entropy'.")
+        if method == "sdp":
+            return float(self.key_rate_per_experimental_run_sdp(rate_type=rate_type))
+        raise ValueError("method must be 'lp' or 'sdp'.")
 
     @cached_property
     def eve_uncertainty_key_min_entropy_by_y_lp(self) -> np.ndarray:
@@ -1046,6 +1470,255 @@ class ContextualityProtocol:
         """Print reverse-Fano key-rate summary."""
         prefix = "\n" if leading_newline else ""
         print(prefix + self.format_key_rate_summary_reverse_fano_lp(precision=precision))
+
+    def format_eve_guessing_metrics(
+        self,
+        *,
+        method: ReportingMethod = "both",
+        include_per_y_lp: bool = False,
+        precision_vector: int = 3,
+        precision_scalar: int = 6,
+    ) -> str:
+        """Format Eve guessing metrics for LP, SDP, or both assumptions."""
+        sections: list[str] = []
+        for block in self.eve_guessing_metrics(method=method, include_per_y_lp=include_per_y_lp):
+            one_method = str(block["method"])
+            holder = str(block["master_key_holder"])
+            lines = [
+                f"Eve {one_method.upper()} guessing metrics, where the master key is held by {holder}:",
+            ]
+            if one_method == "lp" and include_per_y_lp and block["per_y"] is not None:
+                lines.extend(
+                    [
+                        "P_E^guess(master_key|y) (LP):",
+                        self._format_numeric_array(block["per_y"], precision=precision_vector),
+                    ]
+                )
+            summary_label = "P_E^guess(master_key|Y) (LP)" if one_method == "lp" else "P_E^guess(master_key|key-eligible x,y) (SDP)"
+            lines.append(
+                summary_label
+                + " = "
+                + ContextualityScenario.format_numeric(float(block["average"]), precision=precision_scalar)
+            )
+            sections.append("\n".join(lines))
+        return "\n\n".join(sections)
+
+    def print_eve_guessing_metrics(
+        self,
+        *,
+        method: ReportingMethod = "both",
+        include_per_y_lp: bool = False,
+        precision_vector: int = 3,
+        precision_scalar: int = 6,
+        leading_newline: bool = True,
+    ) -> None:
+        """Print Eve guessing metrics for LP, SDP, or both assumptions."""
+        prefix = "\n" if leading_newline else ""
+        print(prefix + self.format_eve_guessing_metrics(
+            method=method,
+            include_per_y_lp=include_per_y_lp,
+            precision_vector=precision_vector,
+            precision_scalar=precision_scalar,
+        ))
+
+    def format_eve_uncertainty_metrics(
+        self,
+        *,
+        method: ReportingMethod = "both",
+        rate_type: RateType = "reverse_fano",
+        include_per_y_lp: bool = False,
+        precision_vector: int = 3,
+        precision_scalar: int = 6,
+    ) -> str:
+        """Format Eve uncertainty metrics for LP, SDP, or both assumptions."""
+        canonical_rate_type = self._canonicalize_rate_type(rate_type)
+        label = "reverse-Fano" if canonical_rate_type == "reverse_fano" else "min-entropy"
+        sections: list[str] = []
+        for one_method in self._expand_reporting_methods(method):
+            lines = [
+                f"Eve uncertainty lower bound ({label}, {one_method.upper()}), master key held by {self.master_key_holder}:",
+            ]
+            if one_method == "lp":
+                if include_per_y_lp:
+                    lines.extend(
+                        [
+                            f"H_E(master_key|y) >= {label}(LP):",
+                            self._format_numeric_array(
+                                self._lp_uncertainty_vector_for_holder(
+                                    self.master_key_holder,
+                                    rate_type=canonical_rate_type,
+                                ),
+                                precision=precision_vector,
+                            ),
+                        ]
+                    )
+                lines.append(
+                    "H_E(master_key|Y) >= "
+                    + ContextualityScenario.format_numeric(
+                        self._lp_uncertainty_average_for_holder(
+                            self.master_key_holder,
+                            rate_type=canonical_rate_type,
+                        ),
+                        precision=precision_scalar,
+                    )
+                )
+            else:
+                lines.append(
+                    "H_E(master_key) >= "
+                    + ContextualityScenario.format_numeric(
+                        self.eve_uncertainty(method="sdp", rate_type=canonical_rate_type),
+                        precision=precision_scalar,
+                    )
+                )
+            sections.append("\n".join(lines))
+        return "\n\n".join(sections)
+
+    def print_eve_uncertainty_metrics(
+        self,
+        *,
+        method: ReportingMethod = "both",
+        rate_type: RateType = "reverse_fano",
+        include_per_y_lp: bool = False,
+        precision_vector: int = 3,
+        precision_scalar: int = 6,
+        leading_newline: bool = True,
+    ) -> None:
+        """Print Eve uncertainty metrics for LP, SDP, or both assumptions."""
+        prefix = "\n" if leading_newline else ""
+        print(prefix + self.format_eve_uncertainty_metrics(
+            method=method,
+            rate_type=rate_type,
+            include_per_y_lp=include_per_y_lp,
+            precision_vector=precision_vector,
+            precision_scalar=precision_scalar,
+        ))
+
+    def format_key_rate_summary(
+        self,
+        *,
+        method: ReportingMethod = "both",
+        rate_type: RateType = "reverse_fano",
+        include_per_y_lp: bool = False,
+        header: bool = True,
+        precision: int = 6,
+    ) -> str:
+        """Format key-rate summary for LP, SDP, or both Eve assumptions."""
+        canonical_rate_type = self._canonicalize_rate_type(rate_type)
+        label = "reverse Fano" if canonical_rate_type == "reverse_fano" else "min entropy"
+        sections: list[str] = []
+        for one_method in self._expand_reporting_methods(method):
+            lines: list[str] = []
+            if header:
+                lines.append(
+                    f"Key-rate summary ({label}, {one_method.upper()}, master key held by {self.master_key_holder}):"
+                )
+            if one_method == "lp" and include_per_y_lp:
+                per_y_rates = (
+                    self.key_rate_by_y_reverse_fano_lp
+                    if canonical_rate_type == "reverse_fano"
+                    else self.key_rate_by_y_min_entropy_lp
+                )
+                lines.extend(
+                    [
+                        "bits per key-generating run by y (LP) =",
+                        self._format_numeric_array(per_y_rates, precision=precision),
+                    ]
+                )
+            lines.extend(
+                [
+                    "bits per key-generating run = "
+                    + ContextualityScenario.format_numeric(
+                        self.key_rate_per_key_run(method=one_method, rate_type=canonical_rate_type),
+                        precision=precision,
+                    ),
+                    "key-generating run probability per experimental run = "
+                    + ContextualityScenario.format_numeric(self.key_generation_probability_per_run, precision=precision),
+                    "bits per experimental run = "
+                    + ContextualityScenario.format_numeric(
+                        self.key_rate_per_experimental_run(method=one_method, rate_type=canonical_rate_type),
+                        precision=precision,
+                    ),
+                ]
+            )
+            sections.append("\n".join(lines))
+        return "\n\n".join(sections)
+
+    def print_key_rate_summary(
+        self,
+        *,
+        method: ReportingMethod = "both",
+        rate_type: RateType = "reverse_fano",
+        include_per_y_lp: bool = False,
+        precision: int = 6,
+        leading_newline: bool = True,
+    ) -> None:
+        """Print key-rate summary for LP, SDP, or both Eve assumptions."""
+        prefix = "\n" if leading_newline else ""
+        print(
+            prefix
+            + self.format_key_rate_summary(
+                method=method,
+                rate_type=rate_type,
+                include_per_y_lp=include_per_y_lp,
+                precision=precision,
+            )
+        )
+
+    def format_eve_security_metrics(
+        self,
+        *,
+        method: ReportingMethod = "both",
+        rate_type: RateType = "reverse_fano",
+        include_per_y_lp: bool = False,
+        precision_vector: int = 3,
+        precision_scalar: int = 6,
+    ) -> str:
+        """Format Eve guessing, uncertainty, and key-rate outputs together."""
+        sections = [
+            self.format_eve_guessing_metrics(
+                method=method,
+                include_per_y_lp=include_per_y_lp,
+                precision_vector=precision_vector,
+                precision_scalar=precision_scalar,
+            ),
+            self.format_eve_uncertainty_metrics(
+                method=method,
+                rate_type=rate_type,
+                include_per_y_lp=include_per_y_lp,
+                precision_vector=precision_vector,
+                precision_scalar=precision_scalar,
+            ),
+            self.format_key_rate_summary(
+                method=method,
+                rate_type=rate_type,
+                include_per_y_lp=include_per_y_lp,
+                precision=precision_scalar,
+            ),
+        ]
+        return "\n\n".join(sections)
+
+    def print_eve_security_metrics(
+        self,
+        *,
+        method: ReportingMethod = "both",
+        rate_type: RateType = "reverse_fano",
+        include_per_y_lp: bool = False,
+        precision_vector: int = 3,
+        precision_scalar: int = 6,
+        leading_newline: bool = True,
+    ) -> None:
+        """Print Eve guessing, uncertainty, and key-rate outputs together."""
+        prefix = "\n" if leading_newline else ""
+        print(
+            prefix
+            + self.format_eve_security_metrics(
+                method=method,
+                rate_type=rate_type,
+                include_per_y_lp=include_per_y_lp,
+                precision_vector=precision_vector,
+                precision_scalar=precision_scalar,
+            )
+        )
 
     def _validate_y_distribution(self, y_distribution: np.ndarray | Sequence[float] | None) -> np.ndarray:
         """Validate optional y-distribution and return normalized weights of shape ``(Y,)``."""

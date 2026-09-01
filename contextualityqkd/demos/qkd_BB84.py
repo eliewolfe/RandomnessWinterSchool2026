@@ -18,10 +18,9 @@ if str(_REPO_ROOT) not in sys.path:
 import numpy as np
 import sympy as sp
 
+from contextualityqkd.protocol import ContextualityProtocol
 from contextualityqkd.quantum import (
     GPTContextualityScenario,
-    projector_hs_vector,
-    xz_plane_ket,
 )
 from contextualityqkd.scenario import ContextualityScenario
 
@@ -29,17 +28,17 @@ from contextualityqkd.scenario import ContextualityScenario
 def main() -> None:
     # Keep numerical arrays readable while preserving enough detail.
     np.set_printoptions(precision=6, suppress=True)
-    ContextualityScenario.print_title("QKD: Z and Xmeasurements")
+    ContextualityScenario.print_title("QKD: Z and X measurements")
 
     # ---------------------------------------------------------------------
     # 1) Define the qubit states/effects in ket form on the X-Z great circle.
     #    - 0 and pi are computational basis |0>,|1> (Z measurement basis)
     #    - +/- pi/2 are |+>,|-> (X basis)
     # ---------------------------------------------------------------------
-    ket0 = xz_plane_ket(0)
-    ket1 = xz_plane_ket(sp.pi)
-    ket_plus = xz_plane_ket(sp.pi / 2)
-    ket_minus = xz_plane_ket(-sp.pi / 2)
+    ket0 = GPTContextualityScenario.xz_plane_ket(0)
+    ket1 = GPTContextualityScenario.xz_plane_ket(sp.pi)
+    ket_plus = GPTContextualityScenario.xz_plane_ket(sp.pi / 2)
+    ket_minus = GPTContextualityScenario.xz_plane_ket(-sp.pi / 2)
     
     state_kets = [ket0, ket1, ket_plus, ket_minus]
     effect_kets = [ket0, ket1, ket_plus, ket_minus]
@@ -62,8 +61,8 @@ def main() -> None:
     # ---------------------------------------------------------------------
     # 3) Convert projectors -> GPT vectors.
     # ---------------------------------------------------------------------
-    gpt_state_set = np.array([projector_hs_vector(ket) for ket in state_kets], dtype=object)
-    gpt_effect_set = np.array([projector_hs_vector(ket) for ket in effect_kets], dtype=object)
+    gpt_state_set = np.array([GPTContextualityScenario.projector_hs_vector(ket) for ket in state_kets], dtype=object)
+    gpt_effect_set = np.array([GPTContextualityScenario.projector_hs_vector(ket) for ket in effect_kets], dtype=object)
 
     # ---------------------------------------------------------------------
     # 4) Build the scenario directly from GPT primitives.
@@ -71,7 +70,6 @@ def main() -> None:
     scenario = GPTContextualityScenario(
         gpt_states=gpt_state_set,
         gpt_effects=gpt_effect_set,
-        preparation_indices=preparation_indices,
         measurement_indices=measurement_indices,
         verbose=False,
     )
@@ -82,15 +80,33 @@ def main() -> None:
     scenario.print_measurement_operational_equivalences(precision=3, representation="symbolic")
     print("\nSymbolic probability table P(a,b|x,y):")
     scenario.print_probabilities(precision=3, representation="symbolic")
+    scenario.print_contextuality_measures(metrics=["contextual_fraction"], precision=3, show_inequalities=True, backend_solver="mosek_simplex")
 
-    # Guess-who = Bob (master-key choice for this QKD example).
-    scenario.print_guessing_probability_grids(
-        guess_who="Bob",
-        precision=3,
-        include_keyrate_pairs=True,
+    protocol = ContextualityProtocol(
+        scenario=scenario,
+        where_key=None,
+        master_key_holder="Alice",
+        atol=1e-9,
+        lp_solver="highs",
+        sdp_solver="MOSEK",
+        sdp_projective_bob=False,
+        sdp_projective_eve=False,
+        sdp_npa_level_bob=1,
+        sdp_npa_level_eve=1,
+        sdp_use_u_only=True,
+        sdp_threads=1,
+        sdp_verbose=2,
     )
-    scenario.print_contextuality_measures(precision=3)
-
+    protocol.print_eve_security_metrics(
+        method="both",
+        rate_type="reverse_fano",
+        include_per_y_lp=False,
+        precision_vector=3,
+        precision_scalar=6,
+        leading_newline=True,
+    )
+    protocol.print_eve_guess_upper_bound_inequality_by_y()
+    protocol.print_eve_guess_upper_bound_inequality()
 
 if __name__ == "__main__":
     main()

@@ -13,15 +13,26 @@ authors = [
   { name = "Randomness Winter School 2026" }
 ]
 dependencies = [
-  "numpy",
-  "mosek",
-  "scipy",
-  "pycddlib",
-  "sympy",
-  "methodtools",
-  "numba",
-  "networkx",
-  "tqdm",
+  "numpy>=2.2.6",
+  "mosek>=11.2.0",
+  "scipy>=1.15.3",
+  "pycddlib>=3.0.2",
+  "sympy>=1.14.0",
+  "methodtools>=0.4.7",
+  "numba>=0.65.1",
+  "networkx>=3.4.2",
+  "tqdm>=4.67.3",
+  "cvxpy>=1.7.5",
+]
+
+[project.optional-dependencies]
+gurobi = [
+  "gurobipy>=13.0.2",
+]
+
+[dependency-groups]
+dev = [
+  "pytest>=9.0.3",
 ]
 
 [tool.setuptools.packages.find]
