@@ -108,13 +108,12 @@ for d in range(2, 7):
         print(f"  d={d} {variant:6s}: S_POM={success:.5f} (unconstrained {row['unconstrained_success']:.5f}) "
               f"G_LP={g_lp:.5f} rate_LP={row['lp_rate_key_run_RF']:+.5f} keymap_ok={keymap_ok} "
               f"({time.time()-t0:.0f}s)", flush=True)
-        # SDP only where it can inform: d = 2, and the near-projective
-        # single-parity variant up to d = 4. Beyond that the Naimark SDP's
-        # memory footprint exceeds the container (observed cgroup OOM at
-        # ~14 GB), and at level 1 the SDP is in any case looser than the
-        # exact LP for every d >= 3 tested, so the LP already gives the
-        # binding certified rate there.
-        if d == 2 or (variant == "single" and d <= 4):
+        # SDP only where it can inform: d = 2, and the single-parity
+        # variant at d = 3. Larger instances exhaust the container memory
+        # (observed cgroup OOM at ~14 GB), and at level 1 the SDP is in
+        # any case looser than the exact LP for every d >= 3 variant
+        # tested, so the LP already gives the binding certified rate.
+        if d == 2 or (variant == "single" and d <= 3):
             t0 = time.time()
             raw = float(p.eve_sdp_solver.eve_success_probability)
             row["sdp1_guess_raw"] = raw
