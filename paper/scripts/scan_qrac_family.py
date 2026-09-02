@@ -108,7 +108,12 @@ for d in range(2, 7):
         print(f"  d={d} {variant:6s}: S_POM={success:.5f} (unconstrained {row['unconstrained_success']:.5f}) "
               f"G_LP={g_lp:.5f} rate_LP={row['lp_rate_key_run_RF']:+.5f} keymap_ok={keymap_ok} "
               f"({time.time()-t0:.0f}s)", flush=True)
-        if d <= 5:
+        # SDP only where it can inform: d = 2, and the near-projective
+        # single-parity variant up to d = 5. The "all"-variant POVMs at
+        # d >= 4 are far from projective and blow up the Naimark SDP's
+        # expression graph (observed cgroup OOM at ~14 GB) while the LP
+        # already settles those protocols (rates deeply negative).
+        if d == 2 or (variant == "single" and d <= 5):
             t0 = time.time()
             raw = float(p.eve_sdp_solver.eve_success_probability)
             row["sdp1_guess_raw"] = raw

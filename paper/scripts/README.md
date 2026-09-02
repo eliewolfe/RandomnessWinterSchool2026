@@ -25,9 +25,20 @@ Where a script uses level 2 it says so and why.
 | Sec. Results C, Table II | `verify_where_key_table.py` | ~2 min |
 | Sec. Results D, Table III | `verify_opeq_restriction_table.py` | ~3 min |
 | Sec. Results E, Fig. 3, closed forms | `verify_witness_only_rates.py` | ~6 min |
+| Sec. Results F, QRAC family table | `scan_qrac_family.py` | ~15 min |
 | Fig. 1 rendering | `fig_single_setting.py` | seconds |
 | Fig. 2 rendering | `fig_porac.py` | seconds |
 | Fig. 3 rendering | `fig_witness_only.py` | seconds |
 
 Shared protocol definitions live in `_protocols.py` (one definition per
-protocol, imported by every script).
+protocol, imported by every script), including the (n,d) MUB-QRAC and
+d-ary oblivious-multiplexing constructions (optimal states, obliviousness
+see-saw, exact-projection and POVM-repair helpers).
+
+Performance note: the LP backend here is MOSEK interior point. The RAC
+scenarios have massively degenerate optimal faces on which simplex methods
+(HiGHS, MOSEK simplex) stall by orders of magnitude, while interior point
+solves in about a second; all optima agree. Operational-equivalence bases
+are discovered by NumPy SVD (orthonormal, well conditioned) -- see
+`contextualityqkd.linalg_utils.null_space_basis` -- and can be lifted to
+exact symbolic coefficients with `lift_nullspace_to_symbolic`.
