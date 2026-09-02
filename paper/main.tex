@@ -790,45 +790,90 @@ figure of merit is thus emphatically \emph{not} a proxy for key: what
 powers the key is never how well Bob decodes, but which linear
 identities Alice's ensemble is promised to satisfy.
 
-\emph{Act two: obliviousness buys the key back, at a price that grows
-with $d$.} The $d$-ary oblivious multiplexing task of
-Ref.~\cite{Baldijao2026} (Example~1; see also
-Refs.~\cite{SpekkensPOM2009,AmbainisBanik2019}) supplies exactly the
-missing promises: the encoding must hide every $d$-ary ``parity''
-$a\cdot x \bmod d$ with all components of $a$ nonzero, each hidden
-direction contributing $d-1$ preparation equivalences. For each
-$d$ we optimize the protocol by a convex see-saw (for fixed
-measurements, the optimal oblivious ensemble is a single SDP; for
-fixed states, each decoding POVM is another) and feed the result to
-our pipeline. Table~\ref{tab:qrac} collects the outcome. At $d=2$
-obliviousness is free --- the see-saw recovers the Spekkens
-parity-oblivious optimum $\tfrac12(1+\tfrac1{\sqrt2})$, which is the
-unconstrained QRAC value, and the protocol is the rotated BB84. For
-every $d\ge3$ the constraint genuinely bites (MUB decoding is no
-longer optimal, consistent with the biased-basis constructions of
-Ref.~\cite{AmbainisBanik2019}), Bob's success drops below the
-unconstrained optimum, and the certified rates tell the
-dimension-versus-security story quantitatively.
-\todo{Finalize Table~\ref{tab:qrac} and the quantitative
-dimension-scaling discussion from \repoScript{scan\_qrac\_family.py}
-output; add figure if the trend warrants one.}
+\emph{Act two: obliviousness buys constraints back, at a price that
+grows with $d$.} Obliviousness promises supply the missing linear
+dependencies. We analyze two variants for each $d$: the maximal
+$d$-ary oblivious multiplexing of Ref.~\cite{Baldijao2026} (Example~1)
+--- hide every $d$-ary ``parity'' $a\cdot x\bmod d$ whose direction
+$a$ has all components nonzero --- and the single-parity $d$-level
+PORAC of Ref.~\cite{AmbainisBanik2019}, which hides only
+$x_{1}+x_{2}\bmod d$ (at $d=2$ the two coincide with the original
+parity-oblivious multiplexing of Ref.~\cite{SpekkensPOM2009}). For
+each variant we optimize the protocol by a convex see-saw --- for
+fixed measurements, the optimal oblivious ensemble is a single SDP;
+for fixed states, each decoding POVM is another --- and feed the
+result to our pipeline. Table~\ref{tab:qrac} collects the outcome.
+
+Three regimes emerge. At $d=2$ obliviousness is \emph{free}: the
+see-saw recovers the unconstrained optimum
+$\tfrac12(1+\tfrac1{\sqrt2})$, the protocol is the rotated BB84, and
+both adversaries yield positive rates. At the opposite extreme,
+\emph{over-promising destroys the advantage itself}: under the maximal
+promise set at $d=3$ the see-saw success collapses exactly to the
+\emph{classical} RAC optimum $\tfrac12(1+\tfrac1d)=\tfrac23$ --- an
+ensemble oblivious to every mixed direction has no quantum advantage
+left to power a key. The single-parity middle ground is the
+interesting regime: at $d=3$ the promise costs almost nothing
+($S_{\Bob}=\tfrac79\approx0.778$ against the unconstrained $0.789$)
+and genuinely constrains Eve ($\pguess=\tfrac59$, exactly), yet the
+reverse-Fano rate still comes out slightly negative ($-0.098$ bits per
+key round): the $d$-ary error-correction cost
+$H(K|B)\approx0.986$ bits grows faster with $d$ than Eve's certified
+ignorance. At level~1 of the Moroder hierarchy the quantum adversary's
+certified rates coincide with the LP rates for every $d\ge3$ variant
+(the relaxation is looser than the exact LP there), so within this
+family the certified-key corner is $d=2$ --- and the near-miss at
+$(2,3)$ with the single-parity promise marks the natural target for
+sharper constructions (biased decoding bases
+\cite{AmbainisBanik2019}, nontrivial \wherekey{}, higher hierarchy
+levels).
+
+The verdict on key rate versus dimension and word count, across this
+section and Secs.~\ref{sec:results-single-setting}--\ref{sec:results-porac}:
+the RAC \emph{advantage} $\bar p_{Q}-\bar p_{\mathrm{cl}}$, which
+peaks near $d=4$ and persists for all $(n,d)$ probed in
+Ref.~\cite{AmbainisKravchenko2024}, is simply not the currency of
+security. Raising the dimension $d$ at fixed $n=2$ erodes the key
+twice over --- the optimal states shed their linear dependencies, and
+once dependencies are re-imposed by promise the per-dit
+error-correction cost outruns Eve's ignorance. Raising the word count
+$n$ at fixed $d=2$ (the $(3,2)$-PORAC of
+Sec.~\ref{sec:results-porac}) destroys the key against the
+operational adversary while \emph{preserving} it against the quantum
+one. The family's certified sweet spot, against both adversaries at
+once, is its smallest member.
 
 \begin{table}
 \caption{\label{tab:qrac}The $(2,d)$ random-access-code family with
-trivial \wherekey{} (every round keyed). ``Plain'': proven-optimal
-unconstrained QRAC ensemble; ``POM'': $d$-ary oblivious multiplexing
-(see-saw optimized under the obliviousness promises).
-$S_{\Bob}$ = Bob's decoding success; $N_{\mathrm{prep}}$ = number of
-preparation operational equivalences; rates in bits per
-key-generating round (LP exact for the operational adversary; SDP =
-Moroder level 1 certified bound for the quantum adversary). Checked by
-\repoScript{scan\_qrac\_family.py}. \todo{Fill from scan output.}}
+trivial \wherekey{} (every round keyed), Alice holding the master key.
+``plain'': proven-optimal unconstrained QRAC ensemble; ``POM-all'':
+maximal $d$-ary oblivious multiplexing (all mixed directions hidden);
+``POM-1'': single-parity promise ($x_1{+}x_2 \bmod d$ hidden). See-saw
+optimized states/measurements for the POM rows. $S_{\Bob}$ = Bob's
+decoding success; $N_{\mathrm{prep}}$ = number of promised preparation
+equivalences; $\pguess$ = Eve's exact operational-adversary guessing
+probability (LP); $r_{\mathrm{LP}}$ = reverse-Fano rate in bits per key
+round. At Moroder level 1 the quantum-adversary certificate improves on
+$r_{\mathrm{LP}}$ only at $d=2$ (rate $0.396$); elsewhere the level-1
+relaxation is looser than the LP. Every entry checked by
+\repoScript{scan\_qrac\_family.py}.}
 \begin{ruledtabular}
-\begin{tabular}{lccccc}
-protocol & $S_{\Bob}$ & $N_{\mathrm{prep}}$ & $\pguess$ (LP) &
-$r_{\mathrm{LP}}$ & $r_{\mathrm{SDP}}$ \\
+\begin{tabular}{lcccc}
+protocol & $S_{\Bob}$ & $N_{\mathrm{prep}}$ & $\pguess$ (LP) & $r_{\mathrm{LP}}$ \\
 \colrule
-\multicolumn{6}{c}{\todo{rows from \repoScript{scan\_qrac\_family.py}}} \\
+plain, $d=2$ (rot.\ BB84) & $0.854$ & 1 & $0.646$ & $+0.106$ \\
+plain, $d\in\{3,5,7\}$ & $\tfrac12(1{+}\tfrac{1}{\sqrt d})$ & 0 & $1$ & no key \\
+plain, $d=4$ & $0.750$ & 4 & $0.500$ & $-0.208$ \\
+plain, $d=6$ & $0.704$ & 5 & $0.678$ & $-0.918$ \\
+plain, $d=8$ & $0.677$ & 12 & $0.448$ & $-0.634$ \\
+\colrule
+POM-all, $d=3$ & $2/3$ & 4 & $2/3$ & $-0.585$ \\
+POM-all, $d=4$ & $0.427$ & 15 & $0.323$ & $-0.165$ \\
+POM-all, $d=5$ & $0.600$ & 16 & $0.600$ & $-0.971$ \\
+\colrule
+POM-1, $d=3$ & $7/9$ & 2 & $5/9$ & $-0.098$ \\
+POM-1, $d=4$ & $0.702$ & 3 & $0.548$ & $-0.417$ \\
+POM-1, $d=5$ & $0.624$ & 4 & $0.576$ & $-0.861$ \\
 \end{tabular}
 \end{ruledtabular}
 \end{table}
