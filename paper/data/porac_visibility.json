@@ -153,5 +153,7 @@
    "honest_cost": 0.744007551249001
   }
  ],
- "sdp1_threshold_eta": 0.9439884178183253
+ "sdp1_threshold_eta": 0.9439884178183253,
+ "sb_at_rf_threshold": 0.7725059835696495,
+ "me_threshold_eta": 0.9715139816097286
 }

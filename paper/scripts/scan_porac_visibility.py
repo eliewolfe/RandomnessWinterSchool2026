@@ -15,6 +15,12 @@ where_key, Alice holding the master key):
   [Q3] The quantum adversary's certified rate (SDP, Moroder level 1:
        moment words {1, B, E, BE}, "NPA 1+ABE") crosses zero at
        eta* ~ 0.944 and reaches ~0.256 at eta = 1.
+  [Q4] Conversions used when comparing with Chaturvedi-Farkas-Wright
+       (Quantum 5, 484 (2021)): Bob's PORAC success is
+       S_B(eta) = 1/2 + eta/(2 sqrt 3), so the reverse-Fano threshold
+       corresponds to S_B* ~ 0.7725 and the min-entropy threshold
+       (rate -log2(P_guess) - h(S_B)) to S_B* ~ 0.7805; the noiseless
+       min-entropy rate is ~0.2557.
 
 Writes paper/data/porac_visibility.json (consumed by fig_porac.py).
 Runtime: ~5-10 minutes (one level-1 SDP per grid point; requires MOSEK).
@@ -67,8 +73,25 @@ eta_star = lo - r_lo * (hi - lo) / (r_hi - r_lo)
 ok &= check("[Q3] quantum threshold eta*", eta_star, 0.944, tol=3e-3)
 ok &= check("[Q3] quantum rate at eta=1", by_eta[1.0]["sdp1_rate_key_run_RF"], 0.2556, tol=2e-3)
 
+print("\n[Q4] CFW-comparison conversions:")
+sb_star_rf = 0.5 * (1 + eta_star / math.sqrt(3))
+ok &= check("S_B at reverse-Fano threshold", sb_star_rf, 0.7725, tol=2e-3)
+prev = None
+me_star = None
+for r in rows:
+    g = min(r["sdp1_guess_raw"], r["lp_guess_avg"])
+    me = -math.log2(g) - r["honest_cost"]
+    if prev is not None and prev[1] < 0 <= me:
+        me_star = prev[0] - prev[1] * (r["eta"] - prev[0]) / (me - prev[1])
+    prev = (r["eta"], me)
+ok &= check("S_B at min-entropy threshold", 0.5 * (1 + me_star / math.sqrt(3)), 0.7805, tol=2e-3)
+g1 = min(by_eta[1.0]["sdp1_guess_raw"], by_eta[1.0]["lp_guess_avg"])
+ok &= check("noiseless min-entropy rate", -math.log2(g1) - by_eta[1.0]["honest_cost"], 0.2557, tol=2e-3)
+
 (OUT / "porac_visibility.json").write_text(
-    json.dumps({"eta_scan": rows, "sdp1_threshold_eta": eta_star}, indent=1)
+    json.dumps({"eta_scan": rows, "sdp1_threshold_eta": eta_star,
+                "sb_at_rf_threshold": sb_star_rf,
+                "me_threshold_eta": me_star}, indent=1)
 )
 print("\nwrote", OUT / "porac_visibility.json")
 print("ALL CLAIMS VERIFIED" if ok else "SOME CLAIMS FAILED")

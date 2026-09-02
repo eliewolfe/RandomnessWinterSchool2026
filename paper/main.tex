@@ -414,17 +414,40 @@ do essentially no better than a coin flip, and the certified key rate is
 $0.256$ bits per key-generating round ($0.255$ under the more
 conservative min-entropy accounting). This is the framework's headline
 separation: \emph{which theory Eve is allowed to exploit changes the
-verdict on the same protocol from insecure to secure.} Qualitatively
-this matches Ref.~\cite{ChaturvediFarkasWright2021}, which introduced
-the $(3,2)$-PORAC key-distribution scheme and used their SDP hierarchy
-for contextuality scenarios to certify a positive key rate for Bob
-success probabilities above ${\approx}\,0.776$ up to the quantum
-optimum. \todo{Exact quantitative cross-check against
-Ref.~\cite{ChaturvediFarkasWright2021}: their rate is parameterized by
-Bob's success probability alone, ours conditions on the full behavior,
-so ours should certify at least as much key at the same success
-probability. Verify conventions (per key round vs.\ per run, sifting)
-before quoting their numbers in Table form.}
+verdict on the same protocol from insecure to secure.}
+
+This protocol was introduced, and its security against a quantum
+adversary first established, by Chaturvedi, Farkas and
+Wright~\cite{ChaturvediFarkasWright2021}, and the comparison with their
+analysis is instructive because the two treatments differ in three
+independent ways. \emph{(i) Adversary model.} Their eavesdropper holds
+a share of Alice's (possibly entangled) preparation but is assumed to
+have no quantum memory: she measures a fixed, setting-independent POVM
+in every round, producing her guess before Bob's setting $y$ is
+announced. Our Eve is strictly stronger --- she keeps her probe
+coherent until the announcement and then applies a $y$-dependent
+measurement. \emph{(ii) Conditioning.} Their key-rate bound
+$r \ge -\log_2 S_{\Eve} - h(S_{\Bob})$ is parameterized by a single
+scalar, Bob's PORAC success probability $S_{\Bob}$, with Eve's success
+$S_{\Eve}$ bounded via their projection-based relaxation
+$Q^{\Pi}_{1+BE}$ (the same ``$1{+}$products'' level our default
+corresponds to, but with preparations and measurements restricted to
+pure states and projectors); we instead condition Eve on the full
+behavior $P(b|x,y)$, without purity or projectivity assumptions.
+\emph{(iii) Uncertainty conversion.} They use the min-entropy
+$-\log_2\pguess$; our headline rates use the tighter reverse-Fano
+bound. At the noiseless point the three differences wash out: their
+bound approaches $1-h(S_{\Bob}^{\mathrm{opt}})\approx0.256$ bits as
+$S_{\Eve}\to\tfrac12$, in agreement with our $0.256$ ($0.2557$
+min-entropy). Away from it they trade off. Under uniform
+depolarization ($S_{\Bob}(\eta)=\tfrac12+\tfrac{\eta}{2\sqrt3}$), their
+certificate turns on at $S_{\Bob}\approx0.776$; ours at
+$S_{\Bob}\approx0.7805$ under the same min-entropy conversion ---
+slightly later, the price of granting Eve memory and adaptivity ---
+but at $S_{\Bob}\approx0.7725$, slightly \emph{earlier}, once the
+reverse-Fano conversion and full-behavior conditioning are used. The
+net effect is that the stronger adversary model costs essentially
+nothing in the certified noise window.
 
 The asymmetry between the two solvers deserves emphasis, because the
 two numbers above have different epistemic standings. The LP value is
@@ -718,6 +741,97 @@ error-correction cost $h(\cos^{2}\tfrac{\pi}{8})\approx0.601$.
 Data and checks: \repoScript{verify\_witness\_only\_rates.py};
 rendering: \repoScript{fig\_witness\_only.py}.}
 \end{figure}
+
+\subsection{Random access codes: key rate versus dimension and word
+count}
+\label{sec:results-qrac}
+
+Random access codes are the natural generator of protocols for our
+framework. In an $(n,d)$-RAC, Alice receives a uniformly random word
+$x\in\{0,\dots,d-1\}^{n}$ and sends a single $d$-level system; Bob
+receives $y\in\{1,\dots,n\}$ and tries to output the addressed letter
+$x_{y}$. The key function is then canonical --- the raw key dit is
+$x_{y}$ itself, with \wherekey{} trivial --- and the QRAC literature
+supplies both optimal constructions and closed-form benchmarks: the
+optimal quantum success of the $(2,d)$-RAC is
+$\tfrac12(1+\tfrac{1}{\sqrt d})$, achieved with two mutually unbiased
+bases and beating the classical optimum
+$\tfrac12(1+\tfrac1d)$~\cite{TavakoliQRAC2015,AmbainisKravchenko2024,FarkasKaniewski2019}
+(Ref.~\cite{AmbainisKravchenko2024} gives closed forms for
+$n=2,3,4$ and arbitrary $d$, their Eqs.~(45)--(50); optimality for
+$n=2$ is due to Ref.~\cite{FarkasKaniewski2019}, whose self-testing
+result also fixes the optimal apparatus to be MUBs). Our rotated-BB84
+warm-up of Sec.~\ref{sec:results-single-setting} is precisely the
+$(2,2)$ member of this family, and the $(3,2)$-PORAC of
+Sec.~\ref{sec:results-porac} its parity-oblivious cousin. It is
+tempting to expect the quantum advantage of high-$d$ QRACs to power
+correspondingly strong key rates. The truth is more interesting, in
+two acts.\footnote{Every number in this subsection is recomputed and
+checked by \repoScript{scan\_qrac\_family.py}.}
+
+\emph{Act one: plain QRACs certify nothing.} We built the
+proven-optimal $(2,d)$ ensembles for $d=2,\dots,8$ and confirmed Bob's
+success $\tfrac12(1+\tfrac1{\sqrt d})$ to machine precision in each
+case. Yet for every \emph{odd} $d$ the $d^{2}$ optimal states are
+linearly \emph{independent}: the ensemble supports no preparation
+operational equivalence whatsoever, so the operational adversary
+reproduces each preparation exactly and guesses the key dit with
+certainty ($\pguess=1$), and --- by Observation~3 of
+Ref.~\cite{ChaturvediFarkasWright2021} --- the behavior is not even
+contextual. Even values of $d$ retain a handful of accidental
+equivalences (one for $d=2$, four for $d=4$, twelve for $d=8$), but
+only $d=2$ yields a positive rate. This is a sharp operational
+illustration of the trade-off of Ref.~\cite{Baldijao2026}: contextual
+advantage \emph{requires} limited distinguishability, i.e.\ linear
+dependence among the preparations, and the unconstrained QRAC optimum
+buys Bob's success precisely by making Alice's states as
+distinguishable as the task allows. Quantum advantage in the RAC
+figure of merit is thus emphatically \emph{not} a proxy for key: what
+powers the key is never how well Bob decodes, but which linear
+identities Alice's ensemble is promised to satisfy.
+
+\emph{Act two: obliviousness buys the key back, at a price that grows
+with $d$.} The $d$-ary oblivious multiplexing task of
+Ref.~\cite{Baldijao2026} (Example~1; see also
+Refs.~\cite{SpekkensPOM2009,AmbainisBanik2019}) supplies exactly the
+missing promises: the encoding must hide every $d$-ary ``parity''
+$a\cdot x \bmod d$ with all components of $a$ nonzero, each hidden
+direction contributing $d-1$ preparation equivalences. For each
+$d$ we optimize the protocol by a convex see-saw (for fixed
+measurements, the optimal oblivious ensemble is a single SDP; for
+fixed states, each decoding POVM is another) and feed the result to
+our pipeline. Table~\ref{tab:qrac} collects the outcome. At $d=2$
+obliviousness is free --- the see-saw recovers the Spekkens
+parity-oblivious optimum $\tfrac12(1+\tfrac1{\sqrt2})$, which is the
+unconstrained QRAC value, and the protocol is the rotated BB84. For
+every $d\ge3$ the constraint genuinely bites (MUB decoding is no
+longer optimal, consistent with the biased-basis constructions of
+Ref.~\cite{AmbainisBanik2019}), Bob's success drops below the
+unconstrained optimum, and the certified rates tell the
+dimension-versus-security story quantitatively.
+\todo{Finalize Table~\ref{tab:qrac} and the quantitative
+dimension-scaling discussion from \repoScript{scan\_qrac\_family.py}
+output; add figure if the trend warrants one.}
+
+\begin{table}
+\caption{\label{tab:qrac}The $(2,d)$ random-access-code family with
+trivial \wherekey{} (every round keyed). ``Plain'': proven-optimal
+unconstrained QRAC ensemble; ``POM'': $d$-ary oblivious multiplexing
+(see-saw optimized under the obliviousness promises).
+$S_{\Bob}$ = Bob's decoding success; $N_{\mathrm{prep}}$ = number of
+preparation operational equivalences; rates in bits per
+key-generating round (LP exact for the operational adversary; SDP =
+Moroder level 1 certified bound for the quantum adversary). Checked by
+\repoScript{scan\_qrac\_family.py}. \todo{Fill from scan output.}}
+\begin{ruledtabular}
+\begin{tabular}{lccccc}
+protocol & $S_{\Bob}$ & $N_{\mathrm{prep}}$ & $\pguess^{\mathrm{LP}}$ &
+$r_{\mathrm{LP}}$ & $r_{\mathrm{SDP}}$ \\
+\colrule
+\multicolumn{6}{c}{\todo{rows from \repoScript{scan\_qrac\_family.py}}} \\
+\end{tabular}
+\end{ruledtabular}
+\end{table}
 
 \section{Discussion}
 \label{sec:discussion}
