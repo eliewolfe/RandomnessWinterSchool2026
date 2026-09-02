@@ -1,0 +1,167 @@
+{
+ "plain": [
+  {
+   "d": 2,
+   "bob_success": 0.8535533905932736,
+   "n_prep_opeqs": 1,
+   "lp_guess": 0.6464466094320098,
+   "lp_rate_key_run_RF": 0.10623074444312447,
+   "honest_cost": 0.6008760366928558
+  },
+  {
+   "d": 3,
+   "bob_success": 0.7886751345948126,
+   "n_prep_opeqs": 0,
+   "lp_guess": 1.0000000000003726,
+   "lp_rate_key_run_RF": -0.9553324166541882,
+   "honest_cost": 0.9553324166541882
+  },
+  {
+   "d": 4,
+   "bob_success": 0.7499999999999999,
+   "n_prep_opeqs": 4,
+   "lp_guess": 0.5000000000415981,
+   "lp_rate_key_run_RF": -0.20751874972261808,
+   "honest_cost": 1.207518749639422
+  },
+  {
+   "d": 5,
+   "bob_success": 0.7236067977499789,
+   "n_prep_opeqs": 0,
+   "lp_guess": 1.0000000000003284,
+   "lp_rate_key_run_RF": -1.403276029602203,
+   "honest_cost": 1.4032760296022033
+  },
+  {
+   "d": 6,
+   "bob_success": 0.7041241452319317,
+   "n_prep_opeqs": 5,
+   "lp_guess": 0.67752551286079,
+   "lp_rate_key_run_RF": -0.918244482226462,
+   "honest_cost": 1.563193456504882
+  },
+  {
+   "d": 7,
+   "bob_success": 0.6889822365046138,
+   "n_prep_opeqs": 0,
+   "lp_guess": 1.000000000060495,
+   "lp_rate_key_run_RF": -1.69831405598878,
+   "honest_cost": 1.69831405598878
+  },
+  {
+   "d": 8,
+   "bob_success": 0.6767766952966365,
+   "n_prep_opeqs": 12,
+   "lp_guess": 0.4482233047033424,
+   "lp_rate_key_run_RF": -0.6335302850257784,
+   "honest_cost": 1.815254835984639
+  }
+ ],
+ "pom": [
+  {
+   "d": 2,
+   "variant": "all",
+   "n_hidden_dirs": 1,
+   "pom_success": 0.8535544519551082,
+   "unconstrained_success": 0.8535533905932737,
+   "keymap_ok": true,
+   "lp_guess": 0.6464476304946112,
+   "lp_rate_key_run_RF": 0.10622610038156238,
+   "honest_cost": 0.6008786386292151,
+   "sdp1_guess_raw": 0.5017041455716287,
+   "sdp1_rate_key_run_RF": 0.39571307022752755,
+   "sdp1_rate_key_run_ME": 0.3942125971455316
+  },
+  {
+   "d": 3,
+   "variant": "all",
+   "n_hidden_dirs": 2,
+   "pom_success": 0.6666669285792178,
+   "unconstrained_success": 0.7886751345948129,
+   "keymap_ok": true,
+   "lp_guess": 0.6666665833314613,
+   "lp_rate_key_run_RF": -0.5849621673539134,
+   "honest_cost": 1.2516290006909907
+  },
+  {
+   "d": 3,
+   "variant": "single",
+   "n_hidden_dirs": 1,
+   "pom_success": 0.7777806405953023,
+   "unconstrained_success": 0.7886751345948129,
+   "keymap_ok": true,
+   "lp_guess": 0.5555556229315021,
+   "lp_rate_key_run_RF": -0.09753816385533992,
+   "honest_cost": 0.9864269179923357,
+   "sdp1_guess_raw": 0.6164963472969832,
+   "sdp1_rate_key_run_RF": -0.09753816385533987,
+   "sdp1_rate_key_run_ME": -0.13843018640267413
+  },
+  {
+   "d": 4,
+   "variant": "all",
+   "n_hidden_dirs": 5,
+   "pom_success": 0.4267658937370898,
+   "unconstrained_success": 0.75,
+   "keymap_ok": true,
+   "lp_guess": 0.32323408504323825,
+   "lp_rate_key_run_RF": -0.16520413087386732,
+   "honest_cost": 1.8004654326540295
+  },
+  {
+   "d": 4,
+   "variant": "single",
+   "n_hidden_dirs": 1,
+   "pom_success": 0.7016392980529358,
+   "unconstrained_success": 0.75,
+   "keymap_ok": true,
+   "lp_guess": 0.5483606990494838,
+   "lp_rate_key_run_RF": -0.41673454468187554,
+   "honest_cost": 1.320013146582908
+  },
+  {
+   "d": 5,
+   "variant": "all",
+   "n_hidden_dirs": 4,
+   "pom_success": 0.6000110976741607,
+   "unconstrained_success": 0.7236067977499789,
+   "keymap_ok": true,
+   "lp_guess": 0.6000000165631773,
+   "lp_rate_key_run_RF": -0.970950670167399,
+   "honest_cost": 1.7709506370410446
+  },
+  {
+   "d": 5,
+   "variant": "single",
+   "n_hidden_dirs": 1,
+   "pom_success": 0.6236157749798447,
+   "unconstrained_success": 0.7236067977499789,
+   "keymap_ok": true,
+   "lp_guess": 0.57639312026607,
+   "lp_rate_key_run_RF": -0.8610271955425142,
+   "honest_cost": 1.708240955010374
+  },
+  {
+   "d": 6,
+   "variant": "all",
+   "n_hidden_dirs": 13,
+   "pom_success": 0.2743454367217914,
+   "unconstrained_success": 0.7041241452319316,
+   "keymap_ok": true,
+   "lp_guess": 0.22565493487674293,
+   "lp_rate_key_run_RF": -0.26825197750304053,
+   "honest_cost": 2.4249991862038183
+  },
+  {
+   "d": 6,
+   "variant": "single",
+   "n_hidden_dirs": 1,
+   "pom_success": 0.6638735554254864,
+   "unconstrained_success": 0.7041241452319316,
+   "keymap_ok": true,
+   "lp_guess": 0.5027931077402561,
+   "lp_rate_key_run_RF": -0.5928958023836896,
+   "honest_cost": 1.5873095869031772
+  }
+ ]
+}
