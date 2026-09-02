@@ -1,0 +1,221 @@
+{
+ "hexagon": {
+  "observed": 0.9999999999519744,
+  "lp_curve": [
+   {
+    "w": 0.0,
+    "eve_guess": 0.9999999999999934,
+    "eve_uncertainty": 1.3100631690576847e-14,
+    "key_rate_per_key_run": 1.3100631690576847e-14,
+    "key_rate_per_experimental_run": 4.366877230192282e-15
+   },
+   {
+    "w": 0.0833333333293312,
+    "eve_guess": 0.9791666665311133,
+    "eve_uncertainty": 0.04166666693777343,
+    "key_rate_per_key_run": 0.04166666693777343,
+    "key_rate_per_experimental_run": 0.01388888897925781
+   },
+   {
+    "w": 0.1666666666586624,
+    "eve_guess": 0.9583333332100862,
+    "eve_uncertainty": 0.08333333357982764,
+    "key_rate_per_key_run": 0.08333333357982764,
+    "key_rate_per_experimental_run": 0.027777777859942544
+   },
+   {
+    "w": 0.2499999999879936,
+    "eve_guess": 0.9374999998890745,
+    "eve_uncertainty": 0.12500000022185098,
+    "key_rate_per_key_run": 0.12500000022185098,
+    "key_rate_per_experimental_run": 0.04166666674061699
+   },
+   {
+    "w": 0.3333333333173248,
+    "eve_guess": 0.9166666665680694,
+    "eve_uncertainty": 0.16666666686386122,
+    "key_rate_per_key_run": 0.16666666686386122,
+    "key_rate_per_experimental_run": 0.05555555562128707
+   },
+   {
+    "w": 0.41666666664665597,
+    "eve_guess": 0.8958333332470656,
+    "eve_uncertainty": 0.2083333335058688,
+    "key_rate_per_key_run": 0.2083333335058688,
+    "key_rate_per_experimental_run": 0.06944444450195626
+   },
+   {
+    "w": 0.4999999999759872,
+    "eve_guess": 0.8749999999260684,
+    "eve_uncertainty": 0.2500000001478633,
+    "key_rate_per_key_run": 0.2500000001478633,
+    "key_rate_per_experimental_run": 0.08333333338262108
+   },
+   {
+    "w": 0.5833333333053183,
+    "eve_guess": 0.8541666666050425,
+    "eve_uncertainty": 0.29166666678991504,
+    "key_rate_per_key_run": 0.29166666678991504,
+    "key_rate_per_experimental_run": 0.09722222226330501
+   },
+   {
+    "w": 0.6666666666346496,
+    "eve_guess": 0.8333333332840364,
+    "eve_uncertainty": 0.3333333334319273,
+    "key_rate_per_key_run": 0.3333333334319273,
+    "key_rate_per_experimental_run": 0.11111111114397576
+   },
+   {
+    "w": 0.7499999999639808,
+    "eve_guess": 0.8124999999630259,
+    "eve_uncertainty": 0.3750000000739482,
+    "key_rate_per_key_run": 0.3750000000739482,
+    "key_rate_per_experimental_run": 0.1250000000246494
+   },
+   {
+    "w": 0.8333333332933119,
+    "eve_guess": 0.7916666666420168,
+    "eve_uncertainty": 0.4166666667159664,
+    "key_rate_per_key_run": 0.4166666667159664,
+    "key_rate_per_experimental_run": 0.13888888890532214
+   },
+   {
+    "w": 0.9166666666226432,
+    "eve_guess": 0.7708333333210176,
+    "eve_uncertainty": 0.4583333333579649,
+    "key_rate_per_key_run": 0.4583333333579649,
+    "key_rate_per_experimental_run": 0.15277777778598828
+   },
+   {
+    "w": 0.9999999999519744,
+    "eve_guess": 0.7500000000000002,
+    "eve_uncertainty": 0.49999999999999956,
+    "key_rate_per_key_run": 0.49999999999999956,
+    "key_rate_per_experimental_run": 0.16666666666666652
+   }
+  ],
+  "full_rate_key_run": 0.5000000000000001
+ },
+ "rotated_bb84": {
+  "observed": 0.41421356236504325,
+  "lp_curve": [
+   {
+    "w": 0.0,
+    "eve_guess": 1.0,
+    "eve_uncertainty": 0.0,
+    "key_rate_per_key_run": -0.6008760366928562,
+    "key_rate_per_experimental_run": -0.3004380183464281
+   },
+   {
+    "w": 0.03451779686375361,
+    "eve_guess": 0.9827411015652481,
+    "eve_uncertainty": 0.03451779686950385,
+    "key_rate_per_key_run": -0.5663582398233523,
+    "key_rate_per_experimental_run": -0.28317911991167616
+   },
+   {
+    "w": 0.06903559372750721,
+    "eve_guess": 0.9654822031332666,
+    "eve_uncertainty": 0.0690355937334668,
+    "key_rate_per_key_run": -0.5318404429593894,
+    "key_rate_per_experimental_run": -0.2659202214796947
+   },
+   {
+    "w": 0.10355339059126081,
+    "eve_guess": 0.9482233047012852,
+    "eve_uncertainty": 0.10355339059742952,
+    "key_rate_per_key_run": -0.49732264609542665,
+    "key_rate_per_experimental_run": -0.24866132304771332
+   },
+   {
+    "w": 0.13807118745501443,
+    "eve_guess": 0.9309644062693039,
+    "eve_uncertainty": 0.13807118746139224,
+    "key_rate_per_key_run": -0.4628048492314639,
+    "key_rate_per_experimental_run": -0.23140242461573196
+   },
+   {
+    "w": 0.17258898431876804,
+    "eve_guess": 0.9137055078373224,
+    "eve_uncertainty": 0.1725889843253552,
+    "key_rate_per_key_run": -0.428287052367501,
+    "key_rate_per_experimental_run": -0.2141435261837505
+   },
+   {
+    "w": 0.20710678118252163,
+    "eve_guess": 0.8964466094053409,
+    "eve_uncertainty": 0.20710678118931813,
+    "key_rate_per_key_run": -0.39376925550353803,
+    "key_rate_per_experimental_run": -0.19688462775176901
+   },
+   {
+    "w": 0.24162457804627524,
+    "eve_guess": 0.8791877109733596,
+    "eve_uncertainty": 0.24162457805328086,
+    "key_rate_per_key_run": -0.3592514586395753,
+    "key_rate_per_experimental_run": -0.17962572931978765
+   },
+   {
+    "w": 0.27614237491002885,
+    "eve_guess": 0.8619288125413782,
+    "eve_uncertainty": 0.2761423749172436,
+    "key_rate_per_key_run": -0.3247336617756126,
+    "key_rate_per_experimental_run": -0.1623668308878063
+   },
+   {
+    "w": 0.31066017177378247,
+    "eve_guess": 0.8446699141093967,
+    "eve_uncertainty": 0.31066017178120653,
+    "key_rate_per_key_run": -0.29021586491164963,
+    "key_rate_per_experimental_run": -0.14510793245582482
+   },
+   {
+    "w": 0.3451779686375361,
+    "eve_guess": 0.8274110156774153,
+    "eve_uncertainty": 0.3451779686451695,
+    "key_rate_per_key_run": -0.2556980680476867,
+    "key_rate_per_experimental_run": -0.12784903402384334
+   },
+   {
+    "w": 0.3796957655012897,
+    "eve_guess": 0.8101521172454339,
+    "eve_uncertainty": 0.3796957655091322,
+    "key_rate_per_key_run": -0.22118027118372396,
+    "key_rate_per_experimental_run": -0.11059013559186198
+   },
+   {
+    "w": 0.41421356236504325,
+    "eve_guess": 0.7928932188134525,
+    "eve_uncertainty": 0.4142135623730949,
+    "key_rate_per_key_run": -0.18666247431976124,
+    "key_rate_per_experimental_run": -0.09333123715988062
+   }
+  ],
+  "full_rate_key_run": 0.1062307444936913,
+  "honest_cost": 0.6008760366928562,
+  "sdp_points_level2": [
+   {
+    "w": 0.20710678118252163,
+    "eve_guess": 0.8197772802368194,
+    "eve_uncertainty": 0.3604454395263612,
+    "key_rate_per_key_run": -0.24043059716649495,
+    "key_rate_per_experimental_run": -0.12021529858324748
+   },
+   {
+    "w": 0.31066017177378247,
+    "eve_guess": 0.7111209836265923,
+    "eve_uncertainty": 0.5777580327468155,
+    "key_rate_per_key_run": -0.02311800394604069,
+    "key_rate_per_experimental_run": -0.011559001973020344
+   },
+   {
+    "w": 0.41421356236504325,
+    "eve_guess": 0.5001277624364205,
+    "eve_uncertainty": 0.9997444751271589,
+    "key_rate_per_key_run": 0.39886843843430275,
+    "key_rate_per_experimental_run": 0.19943421921715138
+   }
+  ],
+  "sdp2_threshold_fraction": 0.76369593997833
+ }
+}

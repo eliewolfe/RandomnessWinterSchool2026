@@ -355,6 +355,15 @@ with plateaus; that is fine (and interesting) but should be anticipated.
 > `paper/data/`. Phase 6 (R5, dimension-bound comparison) remains optional
 > and unstarted. The Zhang-Spekkens reference is confirmed as
 > arXiv:2507.01122 with 'secondary procedures' terminology.
+>
+> **Verification revision (2026-09-02):** every numerical claim in the
+> manuscript now links to a dedicated script under `paper/scripts/`
+> (`verify_*` = claim checks with OK/FAIL output, `scan_*` = figure sweeps,
+> `fig_*` = rendering; see `paper/scripts/README.md`). Quantum bounds default
+> to Moroder level 1 ("NPA 1+ABE"); figures show only the positive-rate
+> region with Eve-uncertainty vs Bob-cost watermark curves, and analytic
+> curve expressions are printed where available (all LP curves are affine in
+> the noise/witness parameter; closed forms in the manuscript).
 
 - **Phase 0 (infrastructure).** TeX toolchain in the session (done — being
   reinstalled after a mirror hiccup); `latexmk` build of `main.tex`;

@@ -16,6 +16,11 @@
 \newcommand{\pguess}{P_{\Eve}^{\mathrm{guess}}}
 \newcommand{\wherekey}{\texttt{where\_key}}
 \newcommand{\todo}[1]{\textcolor{red}{[TODO: #1]}}
+% Link to a verification script in the accompanying repository. Every
+% numerical claim in the Results section carries one of these; the linked
+% script recomputes the claim from scratch and checks it (OK/FAIL).
+\newcommand{\repoBase}{https://github.com/eliewolfe/RandomnessWinterSchool2026/blob/main/paper/scripts}
+\newcommand{\repoScript}[1]{\href{\repoBase/#1}{\texttt{#1}}}
 
 \begin{document}
 
@@ -187,6 +192,20 @@ assignment and its automatic optimization.}
 \section{Results}
 \label{sec:results}
 
+Every numerical claim in this section is substantiated by a dedicated
+script in the accompanying repository (directory
+\href{\repoBase}{\texttt{paper/scripts/}}): each linked
+\texttt{verify\_*} or \texttt{scan\_*} script recomputes the claimed
+quantities from scratch and checks them item by item, and each figure
+names the script that renders it from the scanned data. Unless a script
+states otherwise, quantum-adversary bounds are computed at level~1 of
+the Moroder-type hierarchy~\cite{Moroder2013} --- moment words
+$\{\openone,\,B,\,E,\,BE\}$, colloquially ``NPA $1{+}ABE$'', with
+Alice's preparations indexing the moment-matrix blocks --- and
+operational-adversary values come from the (exact) LP. The repository
+is private during peer preparation and will be made public at
+publication time.
+
 \subsection{Warm-up: key from a single measurement setting}
 \label{sec:results-single-setting}
 
@@ -227,7 +246,12 @@ BB84 --- Alice's four states, Bob measuring $Z$ and $X$ --- certifies
 \emph{nothing}. Our LP, which is exact for that adversary, returns
 $\pguess = \tfrac34$ for either setting, and the resulting key rate
 vanishes ($0.0000$ bits reverse-Fano; the min-entropy bound is strictly
-negative). No qubit assumption enters our framework: Eve is free to
+negative).\footnote{Every number in this subsection's text and in
+Table~\ref{tab:single-setting} is recomputed and checked, claim by
+claim, by \repoScript{verify\_single\_setting\_rates.py}; the
+visibility-scan claims and both thresholds by
+\repoScript{scan\_single\_setting\_visibility.py}.} No qubit assumption
+enters our framework: Eve is free to
 realize the observed BB84 behavior and its operational equivalences on a
 carrier of any dimension, and in that larger arena the noiseless-BB84
 intuition ``no disturbance implies no information'' simply fails. (The
@@ -275,12 +299,28 @@ $y=0$ is controlled entirely by how strongly the data at the
 Figure~\ref{fig:single-setting-noise} traces both key rates as the
 preparations are depolarized with visibility $\eta$ (each state mixed
 with the maximally mixed state, which preserves the preparation
-operational equivalence). The operational-adversary rate stays positive
-down to $\eta^{\ast}\approx 0.932$. The quantum-adversary curve is
-computed at level~2 of the SDP hierarchy; being a relaxation, it is a
-certified \emph{lower} bound on the true quantum key rate everywhere,
-whereas the LP curve is exact for the operational adversary --- an
-asymmetry we dwell on in Sec.~\ref{sec:results-porac}.
+operational equivalence). Here the operational-adversary analysis is
+fully analytic: the LP optimum is affine in the visibility,
+\begin{equation}
+\label{eq:single-setting-analytic}
+  \pguess(\eta) = 1-\frac{\sqrt2}{4}\,\eta ,
+  \qquad
+  r_{\mathrm{LP}}(\eta)
+  = \frac{\eta}{\sqrt2}
+  - h\!\Bigl(\tfrac12+\tfrac{\eta}{2\sqrt2}\Bigr),
+\end{equation}
+where the rate uses the reverse-Fano bound, which for a binary key and
+$\pguess\ge\tfrac12$ reads simply $H_{\Eve}\ge 2(1-\pguess)$ (both
+identities are checked pointwise by the linked scan script). The rate
+crosses zero at the unique root $\eta^{\ast}\approx 0.932$ of
+Eq.~\eqref{eq:single-setting-analytic}. The quantum-adversary curve is
+computed at level~2 of the Moroder hierarchy (level~1 is no stronger
+than the LP away from $\eta=1$; higher levels only tighten the
+certificate) and turns positive already at $\eta\approx0.922$; being a
+relaxation, it is a certified \emph{lower} bound on the true quantum key
+rate everywhere, whereas the LP curve is exact for the operational
+adversary --- an asymmetry we dwell on in
+Sec.~\ref{sec:results-porac}.
 
 \begin{table}
 \caption{\label{tab:single-setting}Noiseless single-key-setting rates
@@ -288,7 +328,8 @@ asymmetry we dwell on in Sec.~\ref{sec:results-porac}.
 for BB84-aligned versus rotated Bob measurements, key from $y^{\ast}=0$
 only, Alice holding the master key. LP values are exact for the
 operational (OPT) adversary; SDP values are certified bounds on the
-quantum adversary (NPA level 1). \todo{Finalize formatting.}}
+quantum adversary (Moroder level 1). Every entry is checked by
+\repoScript{verify\_single\_setting\_rates.py}.}
 \begin{ruledtabular}
 \begin{tabular}{lcc}
  & BB84-aligned & rotated ($\pi/4$) \\
@@ -304,18 +345,20 @@ key rate, quantum, reverse-Fano & $0.0000$ & $0.3989$ ($0.1994$) \\
 \end{table}
 
 \begin{figure}
-\includegraphics[width=\columnwidth]{figures/fig_r1_visibility}
-\caption{\label{fig:single-setting-noise}Key rate per key-generating
-round for the rotated single-setting protocol under preparation
-depolarization with visibility $\eta$. The operational-adversary curve
-(LP) is exact and crosses zero at $\eta^{\ast}\approx0.932$; the
-quantum-adversary curve (SDP hierarchy, level 2) is a certified lower
-bound on the true quantum rate, positive already for
-$\eta\gtrsim0.922$. That the two curves coincide for
-$\eta\lesssim0.9$ is a statement about the level-2 relaxation ---
-higher levels can only lower the quantum curve's implied guessing
-bound --- not a proven coincidence of the two adversaries.
-\todo{Finalize styling.}}
+\includegraphics[width=\columnwidth]{figures/fig_single_setting}
+\caption{\label{fig:single-setting-noise}Rotated single-setting
+protocol under preparation depolarization with visibility $\eta$. Bold
+curves: key rate per key-generating round, shown only where positive
+(LP, exact for the operational adversary, dashed, with its analytic form
+Eq.~\eqref{eq:single-setting-analytic}; SDP at Moroder level~2, solid, a
+certified lower bound for the quantum adversary). Faint watermark
+curves show the mechanism: Eve's certified reverse-Fano uncertainty
+$H_{\Eve}=2(1-\pguess)$ for each adversary against Bob's
+error-correction cost $H(K|B)$; the key rate is their difference, so
+each watermark intersection marks the corresponding threshold
+($\eta^{\ast}\approx0.932$ for the LP, $\approx0.922$ for the SDP).
+Data: \repoScript{scan\_single\_setting\_visibility.py}; rendering:
+\repoScript{fig\_single\_setting.py}.}
 \end{figure}
 
 \subsection{Separating quantum from operational adversaries: the
@@ -341,7 +384,11 @@ parity-oblivious classical maximum of $3/4$
 \cite{ChaturvediFarkasWright2021}; the corresponding
 error-correction cost is $H(K|B,y)\approx 0.744$ bits per round.
 
-Against the operational adversary the protocol is dead on arrival. The
+Against the operational adversary the protocol is dead on
+arrival.\footnote{The noiseless claims of this subsection are checked
+by \repoScript{verify\_porac\_separation.py}; the visibility-scan
+claims, the analytic LP forms, and the quantum threshold by
+\repoScript{scan\_porac\_visibility.py}.} The
 LP --- which, we stress again, computes Eve's optimal guessing
 probability \emph{exactly} for this adversary class --- returns, for
 every setting,
@@ -356,8 +403,9 @@ PORAC behavior and its parity-obliviousness promise genuinely lets Eve
 guess the addressed bit that often.
 
 The quantum adversary, by contrast, is essentially blind here. Already
-at level~1 of the hierarchy (with the U-only Naimark generator
-reduction of Sec.~\ref{sec:sdp}), the SDP certifies
+at level~1 of the Moroder hierarchy (moment words
+$\{\openone,B,E,BE\}$, with the U-only Naimark generator reduction of
+Sec.~\ref{sec:sdp}), the SDP certifies
 \begin{equation}
   \pguess \;\le\; 0.5002 ,
 \end{equation}
@@ -396,20 +444,35 @@ the minimum of the two.
 
 Figure~\ref{fig:porac-noise} traces both adversaries under
 depolarization of Alice's preparations with visibility $\eta$ (which
-preserves parity obliviousness). The operational-adversary rate is
-negative across the entire range --- the separation is not an artifact
-of the noiseless point --- while the certified quantum rate remains
-positive down to $\eta^{\ast}\approx 0.944$.
+preserves parity obliviousness). As in
+Sec.~\ref{sec:results-single-setting}, the operational-adversary
+analysis is fully analytic:
+\begin{equation}
+\label{eq:porac-analytic}
+  \pguess(\eta)=1-\frac{\eta}{2\sqrt3},
+  \qquad
+  r_{\mathrm{LP}}(\eta)=\frac{\eta}{\sqrt3}
+  - h\!\Bigl(\tfrac12+\tfrac{\eta}{2\sqrt3}\Bigr),
+\end{equation}
+and $r_{\mathrm{LP}}(\eta)<0$ for every $\eta\in[0,1]$: the separation
+is not an artifact of the noiseless point --- this protocol certifies
+no key against post-quantum side channels at \emph{any} noise level.
+The certified quantum rate remains positive down to
+$\eta^{\ast}\approx 0.944$.
 
 \begin{figure}
-\includegraphics[width=\columnwidth]{figures/fig_r2_porac}
-\caption{\label{fig:porac-noise}Key rate per key-generating round for
-the $(3,2)$-PORAC protocol under preparation depolarization with
-visibility $\eta$. The operational-adversary curve (LP, exact) never
-reaches zero: this protocol certifies no key against post-quantum
-side channels at any noise level. The quantum-adversary curve (SDP,
-level 1) is a certified lower bound on the true quantum rate.
-\todo{Finalize styling.}}
+\includegraphics[width=\columnwidth]{figures/fig_porac}
+\caption{\label{fig:porac-noise}$(3,2)$-PORAC under preparation
+depolarization with visibility $\eta$. Bold curve: certified quantum
+key rate per key-generating round (SDP, Moroder level 1), shown only
+where positive; it turns on at $\eta^{\ast}\approx0.944$. Faint
+watermark curves show Eve's certified reverse-Fano uncertainty for each
+adversary against Bob's error-correction cost $H(K|B)$; the exact
+operational-adversary uncertainty $H_{\Eve}^{\mathrm{LP}}=\eta/\sqrt3$
+of Eq.~\eqref{eq:porac-analytic} never reaches the cost curve, which is
+why no OPT key rate ever enters the plotted (positive) region. Data:
+\repoScript{scan\_porac\_visibility.py}; rendering:
+\repoScript{fig\_porac.py}.}
 \end{figure}
 
 \subsection{Designing the key map: nontrivial \wherekey{}}
@@ -431,7 +494,9 @@ assignments and keeping the per-experimental-run optimum
 (Sec.~\ref{sec:keyrates}).
 
 Table~\ref{tab:wherekey} shows the effect across our protocol family,
-against the operational adversary (LP, exact). The improvements are far
+against the operational adversary (LP, exact).\footnote{All rates and
+optimizer outputs quoted in this subsection are checked by
+\repoScript{verify\_where\_key\_table.py}.} The improvements are far
 from marginal. For the hexagon protocol (six preparations on the
 $X$--$Z$ great circle, three antipodal binary measurements) the trivial
 assignment yields a nearly worthless $0.017$ bits per run: each
@@ -454,7 +519,9 @@ adversary (LP, exact; reverse-Fano) under the trivial \wherekey{}
 (all $x$ for every $y$) versus the automatically optimized assignment.
 $p_{\mathrm{key}}$ is the fraction of experimental runs that generate
 key under the optimized assignment. Rates in bits; ``run'' = key rate
-per experimental run, ``key'' = per key-generating round.}
+per experimental run, ``key'' = per key-generating round. Every entry
+(and the optimizer's chosen assignments quoted in the text) is checked
+by \repoScript{verify\_where\_key\_table.py}.}
 \begin{ruledtabular}
 \begin{tabular}{lccccc}
  & \multicolumn{2}{c}{trivial} & \multicolumn{3}{c}{optimized} \\
@@ -505,7 +572,9 @@ the behavior and all preparation equivalences but \emph{forgets} every
 measurement equivalence beyond completeness. Since this only removes
 constraints from Eve's LP, her guessing probability can only rise;
 the question is by how much. Table~\ref{tab:opeqs} shows the outcome
-across our protocol family.
+across our protocol family.\footnote{All equivalence counts, guessing
+probabilities, and rates quoted in this subsection are checked by
+\repoScript{verify\_opeq\_restriction\_table.py}.}
 
 \begin{table}
 \caption{\label{tab:opeqs}Eve's exact operational-adversary guessing
@@ -515,7 +584,10 @@ relations. $N_{\mathrm{meas}}$ counts equivalences (full set
 $\to$ completeness-only). Key rates (reverse-Fano, per key-generating
 round) use each protocol's \wherekey{} of
 Table~\ref{tab:wherekey} (optimized for the hexagon and Cabello;
-trivial elsewhere; rotated BB84 keyed on $y^{\ast}=0$).}
+trivial elsewhere; rotated BB84 keyed on $y^{\ast}=0$). Every entry,
+including the equivalence counts and the Cabello rate drop quoted in
+the text, is checked by
+\repoScript{verify\_opeq\_restriction\_table.py}.}
 \begin{ruledtabular}
 \begin{tabular}{lccc}
 protocol & $N_{\mathrm{meas}}$ & $\pguess$ full $\to$ restricted & rate full $\to$ restricted \\
@@ -573,8 +645,11 @@ alone.
 Figure~\ref{fig:witness-only} shows the resulting rate-vs-violation
 curves, using each protocol's contextual-fraction witness (the
 L2-refined dual of Sec.~\ref{sec:scenarios}, precisely the
-noncontextuality inequality an experiment would quote). Three lessons,
-one per curve:
+noncontextuality inequality an experiment would quote).\footnote{Every
+claim of this subsection --- both affine laws, all curve values, the
+quantum threshold, and the dual-witness self-consistency check --- is
+verified by \repoScript{verify\_witness\_only\_rates.py}.} Three
+lessons, one per curve:
 
 \emph{The hexagon loses nothing.} Against the operational adversary,
 Eve's guessing probability under the hexagon witness constraint is
@@ -589,17 +664,18 @@ quantum) eavesdropper.
 
 \emph{The rotated BB84 needs the quantum assumption.} Its
 contextual-fraction witness constrains the operational Eve only as
-$\pguess = 1-w/2$, which at the observed violation
-$w_{\mathrm{obs}}=\sqrt2-1$ gives $0.793 = \cos^{2}(\pi/8)$ ---
-short of certifying key ($-0.187$ bits): against post-quantum side
-channels, this protocol's violation alone is not enough, even though
-its full behavior is (Sec.~\ref{sec:results-single-setting}). The
-quantum adversary is another story: at level~2 of the hierarchy the
-maximal violation pins a quantum Eve to $\pguess\le 0.5001$, recovering
-the full-data quantum rate of $0.399$ bits, and the certified rate
-stays positive for violations above ${\approx}\,76\%$ of maximal ---
-a genuine one-parameter security curve in the style of
-rate-vs-CHSH plots in device-independent QKD.
+$\pguess = 1-w/2$, i.e.\ a rate of $w - h(\cos^{2}\tfrac{\pi}{8})$,
+which at the observed violation $w_{\mathrm{obs}}=\sqrt2-1$ gives
+$\pguess=(3-\sqrt2)/2\approx0.793$ --- short of certifying key
+($-0.187$ bits): against post-quantum side channels, this protocol's
+violation alone is not enough, even though its full behavior is
+(Sec.~\ref{sec:results-single-setting}). The quantum adversary is
+another story: at level~2 of the Moroder hierarchy the maximal
+violation pins a quantum Eve to $\pguess\le 0.5001$, recovering the
+full-data quantum rate of $0.399$ bits, and the certified rate stays
+positive for violations above ${\approx}\,76\%$ of maximal --- a
+genuine one-parameter security curve in the style of rate-vs-CHSH
+plots in device-independent QKD.
 
 \emph{The right inequality always exists.} The contextual-fraction
 witness is a natural choice but not the optimal one. The eavesdropping
@@ -625,17 +701,22 @@ data into secondary procedures satisfying the target equivalences and
 (ii) evaluate one linear witness on the result.
 
 \begin{figure}
-\includegraphics[width=\columnwidth]{figures/fig_r6_witness}
+\includegraphics[width=\columnwidth]{figures/fig_witness_only}
 \caption{\label{fig:witness-only}Key rate per key-generating round
 when Eve is constrained only by the operational equivalences and a
 lower bound $w$ on the protocol's contextual-fraction witness, plotted
-against the fraction of the observed violation. Hexagon (operational
-adversary, LP, exact): the full rate is recovered at the observed
-violation. Rotated BB84: the operational adversary is never beaten by
-the violation alone (dashed), but the quantum adversary (SDP level 2,
-certified lower bound) is --- crossing zero near $76\%$ of the maximal
-violation and recovering the full-data quantum rate at maximal
-violation. \todo{Finalize styling; densify the SDP curve.}}
+against the fraction of the observed violation (positive-rate region
+only). Hexagon (operational adversary, LP, exact): the rate is exactly
+$w/2$ and the full $0.5$-bit rate is recovered at the observed
+violation. Rotated BB84: the quantum adversary (SDP, Moroder level 2,
+certified lower bound) crosses zero near $76\%$ of the maximal
+violation and recovers the full-data quantum rate at maximal
+violation; the faint watermark shows why the operational adversary is
+never beaten by this violation alone --- Eve's exact LP uncertainty
+$H_{\Eve}=w$ caps at $w_{\mathrm{obs}}=\sqrt2-1$, below the
+error-correction cost $h(\cos^{2}\tfrac{\pi}{8})\approx0.601$.
+Data and checks: \repoScript{verify\_witness\_only\_rates.py};
+rendering: \repoScript{fig\_witness\_only.py}.}
 \end{figure}
 
 \section{Discussion}
