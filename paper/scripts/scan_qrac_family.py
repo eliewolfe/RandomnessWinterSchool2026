@@ -16,17 +16,24 @@ the computational or Fourier basis; the key dit is the addressed letter
        rate either. Only d = 2 (the rotated-BB84 protocol of Results A)
        certifies key.
 
-Part B -- d-ary oblivious multiplexing (2,d)-POM, d = 2..6 [Baldijao et
-al., arXiv:2607.26145, Example 1, hiding every direction a with all
-components nonzero]. States and POVMs from a convex see-saw (states step
-is a single SDP for fixed measurements); promised preparation
-equivalences = exactly the imposed obliviousness relations; measurement
-equivalences = effect-level nullspace. Claims:
-  [B1] d = 2 recovers the Spekkens et al. parity-oblivious optimum
-       (1 + 1/sqrt 2)/2 and reproduces the rotated-BB84 rates.
-  [B2] For d >= 3 obliviousness is costly (see-saw success strictly below
-       the unconstrained QRAC value), and the resulting key rates -- LP
-       exact and SDP (Moroder level 1) certified -- are reported per d.
+Part B -- d-ary oblivious multiplexing (2,d)-POM, d = 2..6, in two
+promise variants. "all": Baldijao et al. [arXiv:2607.26145, Example 1]
+-- hide every direction a with all components nonzero; "single": the
+d-level PORAC of Ambainis-Banik-Chaturvedi-Kravchenko-Rai [QIP 18, 111]
+-- hide only the d-ary parity x1 + x2 mod d (the (1,1) class). States
+and POVMs from a convex see-saw (states step is a single SDP for fixed
+measurements); promised preparation equivalences = exactly the imposed
+obliviousness relations; measurement equivalences = effect-level
+nullspace. Claims:
+  [B1] d = 2 (where both variants coincide) recovers the Spekkens et al.
+       parity-oblivious optimum (1 + 1/sqrt 2)/2 and reproduces the
+       rotated-BB84 rates.
+  [B2] For d >= 3 the maximal ("all") promise set is costly -- for d = 3
+       the see-saw success collapses to the CLASSICAL RAC optimum
+       (1 + 1/d)/2 = 2/3: over-promising erases the quantum advantage
+       itself. The single-parity variant retains more success; key rates
+       (LP exact; SDP Moroder level 1 certified) are reported per d and
+       variant.
 
 Writes paper/data/qrac_family.json (consumed by fig_qrac_family.py).
 Runtime: ~20-40 minutes total (see-saws are seconds; the level-1 SDPs
@@ -42,6 +49,7 @@ import numpy as np
 
 from _protocols import (
     check,
+    repair_povms,
     dary_parity_directions,
     pom_seesaw_states_and_measurements,
     protocol,
@@ -77,34 +85,38 @@ for d in range(2, 9):
 ok &= all(r["lp_rate_key_run_RF"] < 1e-9 for r in results["plain"] if r["d"] > 2)
 print("  OK  [A2] no plain (2,d>2) QRAC certifies key against the OPT adversary")
 
-print("\nPart B: d-ary oblivious multiplexing (2,d)-POM")
+print("\nPart B: d-ary oblivious multiplexing (2,d)-POM, two promise variants")
 for d in range(2, 7):
-    t0 = time.time()
-    success, states, povms = pom_seesaw_states_and_measurements(2, d, rounds=8)
-    dirs = dary_parity_directions(2, d)
-    sc = rac_scenario_from_states(states, povms, 2, d, promised_dirs=dirs)
-    keymap_ok = all(int(sc.key_selection_by_xy[i, y]) == x[y]
-                    for i, x in enumerate(qrac_words(2, d)) for y in range(2))
-    p = protocol(sc, where_key=None)
-    g_lp = p.eve_guess_master_key_average_y_lp
-    row = {"d": d, "n_hidden_dirs": len(dirs), "pom_success": success,
-           "unconstrained_success": 0.5 * (1 + 1 / math.sqrt(d)),
-           "keymap_ok": keymap_ok,
-           "lp_guess": g_lp,
-           "lp_rate_key_run_RF": p.key_rate_per_key_run(method="lp"),
-           "honest_cost": p.other_party_uncertainty_key_weighted}
-    print(f"  d={d}: S_POM={success:.5f} (unconstrained {row['unconstrained_success']:.5f}) "
-          f"G_LP={g_lp:.5f} rate_LP={row['lp_rate_key_run_RF']:+.5f} keymap_ok={keymap_ok} "
-          f"({time.time()-t0:.0f}s)", flush=True)
-    if d <= 5:
+    for variant in ("all", "single"):
+        if d == 2 and variant == "single":
+            continue  # single class (1,1): identical to "all" at d = 2
+        dirs = dary_parity_directions(2, d) if variant == "all" else [(1, 1)]
         t0 = time.time()
-        raw = float(p.eve_sdp_solver.eve_success_probability)
-        row["sdp1_guess_raw"] = raw
-        row["sdp1_rate_key_run_RF"] = p.key_rate_per_key_run(method="sdp")
-        row["sdp1_rate_key_run_ME"] = p.key_rate_per_key_run(method="sdp", rate_type="min_entropy")
-        print(f"        SDP(Moroder L1): guess<={raw:.5f} rate_RF>={row['sdp1_rate_key_run_RF']:+.5f} "
+        success, states, povms = pom_seesaw_states_and_measurements(2, d, rounds=8, dirs=dirs)
+        povms = repair_povms(povms)
+        sc = rac_scenario_from_states(states, povms, 2, d, promised_dirs=dirs)
+        keymap_ok = all(int(sc.key_selection_by_xy[i, y]) == x[y]
+                        for i, x in enumerate(qrac_words(2, d)) for y in range(2))
+        p = protocol(sc, where_key=None)
+        g_lp = p.eve_guess_master_key_average_y_lp
+        row = {"d": d, "variant": variant, "n_hidden_dirs": len(dirs), "pom_success": success,
+               "unconstrained_success": 0.5 * (1 + 1 / math.sqrt(d)),
+               "keymap_ok": keymap_ok,
+               "lp_guess": g_lp,
+               "lp_rate_key_run_RF": p.key_rate_per_key_run(method="lp"),
+               "honest_cost": p.other_party_uncertainty_key_weighted}
+        print(f"  d={d} {variant:6s}: S_POM={success:.5f} (unconstrained {row['unconstrained_success']:.5f}) "
+              f"G_LP={g_lp:.5f} rate_LP={row['lp_rate_key_run_RF']:+.5f} keymap_ok={keymap_ok} "
               f"({time.time()-t0:.0f}s)", flush=True)
-    results["pom"].append(row)
+        if d <= 5:
+            t0 = time.time()
+            raw = float(p.eve_sdp_solver.eve_success_probability)
+            row["sdp1_guess_raw"] = raw
+            row["sdp1_rate_key_run_RF"] = p.key_rate_per_key_run(method="sdp")
+            row["sdp1_rate_key_run_ME"] = p.key_rate_per_key_run(method="sdp", rate_type="min_entropy")
+            print(f"          SDP(Moroder L1): guess<={raw:.5f} rate_RF>={row['sdp1_rate_key_run_RF']:+.5f} "
+                  f"({time.time()-t0:.0f}s)", flush=True)
+        results["pom"].append(row)
 
 b2 = results["pom"][0]
 ok &= check("[B1] d=2 POM success = (1+1/sqrt 2)/2", b2["pom_success"], 0.5 * (1 + 1 / math.sqrt(2)), tol=1e-4)
@@ -112,6 +124,8 @@ ok &= check("[B1] d=2 POM LP rate = rotated-BB84 rate", b2["lp_rate_key_run_RF"]
 for r in results["pom"]:
     if r["d"] >= 3:
         ok &= r["pom_success"] < r["unconstrained_success"] - 1e-4
+d3_all = next(r for r in results["pom"] if r["d"] == 3 and r["variant"] == "all")
+ok &= check("[B2] d=3 'all' promise collapses to classical optimum", d3_all["pom_success"], 2/3, tol=1e-4)
 print("  OK  [B2] obliviousness is costly for every d >= 3" if ok else "  (see failures)")
 
 (OUT / "qrac_family.json").write_text(json.dumps(results, indent=1))

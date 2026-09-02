@@ -117,9 +117,12 @@ def porac_scenario(eta: float = 1.0):
 def protocol(scenario, *, where_key=None, level: int = 1, master="Alice") -> ContextualityProtocol:
     """House-default protocol object (LP: HiGHS; SDP: Moroder level 1 or 2)."""
     sdp_kwargs = MORODER_LEVEL_1 if int(level) == 1 else MORODER_LEVEL_2
+    # LP backend: MOSEK interior point. On the large, highly degenerate RAC
+    # scenarios simplex methods (HiGHS, MOSEK simplex) stall by orders of
+    # magnitude, while interior point solves in under a second; optima agree.
     return ContextualityProtocol(
         scenario=scenario, where_key=where_key, master_key_holder=master,
-        lp_solver="highs", **sdp_kwargs,
+        lp_solver="mosek", **sdp_kwargs,
     )
 
 
@@ -216,6 +219,7 @@ def dary_parity_directions(n: int, d: int) -> list[tuple[int, ...]]:
 
 
 def pom_seesaw_states_and_measurements(n: int, d: int, *, rounds: int = 6,
+                                       dirs: list | None = None,
                                        solver: str = "SCS", verbose: bool = False):
     """See-saw for the d-ary oblivious multiplexing protocol.
 
@@ -230,7 +234,8 @@ def pom_seesaw_states_and_measurements(n: int, d: int, *, rounds: int = 6,
     id_coords = _op_coords(np.eye(d), hb)
     bases = _mub_bases(n, d)
     povms = [[np.outer(b[:, k], b[:, k].conj()) for k in range(d)] for b in bases]
-    dirs = dary_parity_directions(n, d)
+    if dirs is None:
+        dirs = dary_parity_directions(n, d)
 
     def as_matrix(vec):
         return sum(vec[i] * hb[i] for i in range(dim))
@@ -313,3 +318,25 @@ def rac_scenario_from_states(states: dict, povms: list, n: int, d: int,
     meas_null = null_space_basis(emat.T, atol=1e-7).reshape(-1, n, d)
     return ContextualityScenario(data=data, opeq_preps=prep, opeq_meas=meas_null,
                                  atol=1e-7, verbose=False)
+
+
+def repair_povms(povms: list, atol: float = 1e-8) -> list:
+    """Return exactly-complete PSD POVMs close to the given ones.
+
+    Symmetrizes each element, clips tiny negative eigenvalues, then conjugates
+    by S^{-1/2} (S = sum of elements) so completeness holds to machine
+    precision -- solver output from a see-saw is otherwise complete only to
+    solver tolerance, which the SDP's exact Naimark identities reject."""
+    out = []
+    for povm in povms:
+        clipped = []
+        for M in povm:
+            H = (np.asarray(M) + np.asarray(M).conj().T) / 2
+            vals, vecs = np.linalg.eigh(H)
+            vals = np.clip(vals, 0.0, None)
+            clipped.append((vecs * vals) @ vecs.conj().T)
+        S = sum(clipped)
+        vals, vecs = np.linalg.eigh(S)
+        inv_sqrt = (vecs * (1.0 / np.sqrt(np.clip(vals, atol, None)))) @ vecs.conj().T
+        out.append([inv_sqrt @ M @ inv_sqrt for M in clipped])
+    return out

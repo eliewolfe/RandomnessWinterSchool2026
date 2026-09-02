@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import functools as _ft
 import warnings
 
 import numpy as np
@@ -17,8 +18,20 @@ def null_space_basis(
 
     Output shape is ``(N_null, n_cols)`` with rows ``v`` satisfying ``matrix @ v = 0``.
     Supported methods: ``"numpy"``, ``"scipy"``, ``"sympy"`` (default).
+
+    The default ``"sympy"`` method dispatches on content: a matrix containing
+    machine floats (inexact entries) is routed to the NumPy SVD path -- exact
+    RREF over ``sp.Float`` entries is both slow and, because SymPy does not
+    pivot by magnitude, numerically treacherous (it can hand back badly
+    conditioned basis vectors that later poison downstream LPs). Exact
+    symbolic input keeps the symbolic route.
     """
     if method == "sympy":
+        if _contains_inexact_entries(matrix):
+            mat = np.asarray(matrix, dtype=float)
+            if mat.ndim != 2:
+                raise ValueError("matrix must be 2D.")
+            return _null_space_numpy(mat, atol=atol)
         return _null_space_sympy(matrix, atol=atol)
 
     mat = np.asarray(matrix, dtype=float)
@@ -155,6 +168,96 @@ def _null_space_sympy(mat: object, atol: float) -> np.ndarray:
         if np.max(np.abs(span_residual)) > 100.0 * float(atol) * span_scale:
             return numpy_basis
     return basis_rows
+
+
+def _contains_inexact_entries(matrix: object) -> bool:
+    """True when the matrix carries machine floats/complex (inexact) entries."""
+    if isinstance(matrix, sp.MatrixBase):
+        return any(getattr(entry, "is_Float", False) or isinstance(entry, (float, complex))
+                   for entry in matrix)
+    arr = np.asarray(matrix)
+    if arr.dtype != object:
+        return np.issubdtype(arr.dtype, np.inexact)
+    for entry in arr.reshape(-1):
+        if isinstance(entry, (float, complex, np.floating, np.complexfloating)):
+            return True
+        if isinstance(entry, sp.Basic) and entry.has(sp.Float):
+            return True
+    return False
+
+
+def lift_nullspace_to_symbolic(
+    numeric_basis: np.ndarray,
+    exact_matrix: object,
+    *,
+    atol: float = 1e-9,
+    max_denominator: int = 10_000,
+) -> np.ndarray | None:
+    """Lift a numeric null-space basis to exact symbolic coefficients.
+
+    Strategy: bring ``numeric_basis`` to reduced row-echelon form (partial
+    pivoting), rationalize each entry with a cached, bounded
+    :func:`sympy.nsimplify` (rationals first, then a small radical alphabet),
+    and verify exactly that every lifted row annihilates ``exact_matrix``.
+    Returns the exact object-dtype basis, or ``None`` when any row fails
+    exact verification -- callers then keep the numeric basis or fall back
+    to a fully symbolic null-space computation. This is the fast hybrid
+    route: the subspace is found numerically (SVD-cheap), and SymPy is used
+    only to certify a handful of candidate coefficients.
+    """
+    basis = np.asarray(numeric_basis, dtype=float)
+    if basis.size == 0:
+        return np.empty((0, basis.shape[1] if basis.ndim == 2 else 0), dtype=object)
+    # RREF with partial pivoting so entries become simple ratios.
+    B = basis.copy()
+    rows, cols = B.shape
+    r = 0
+    for c in range(cols):
+        if r >= rows:
+            break
+        piv = r + int(np.argmax(np.abs(B[r:, c])))
+        if abs(B[piv, c]) < atol:
+            continue
+        B[[r, piv]] = B[[piv, r]]
+        B[r] /= B[r, c]
+        for i in range(rows):
+            if i != r:
+                B[i] -= B[i, c] * B[r]
+        r += 1
+    B = B[:r]
+    B[np.abs(B) < atol] = 0.0
+
+    lifted = np.empty(B.shape, dtype=object)
+    for idx, value in np.ndenumerate(B):
+        sym = _rationalize_cached(round(float(value), 12), max_denominator)
+        if sym is None:
+            return None
+        lifted[idx] = sym
+
+    exact = _to_sympy_matrix_preserving_symbols(exact_matrix)
+    for row in lifted:
+        vec = sp.Matrix(list(row))
+        residual = exact * vec
+        if any(sp.simplify(entry) != 0 for entry in residual):
+            return None
+    return lifted
+
+
+@_ft.lru_cache(maxsize=100_000)
+def _rationalize_cached(value: float, max_denominator: int) -> object | None:
+    """Exact-candidate lookup for one float (cached across calls)."""
+    from fractions import Fraction
+
+    frac = Fraction(value).limit_denominator(max_denominator)
+    if abs(float(frac) - value) < 1e-10:
+        return sp.Rational(frac.numerator, frac.denominator)
+    for candidate in (
+        sp.nsimplify(value, rational=False, tolerance=1e-10,
+                     constants=(sp.sqrt(2), sp.sqrt(3), sp.sqrt(5), sp.sqrt(6), sp.sqrt(7))),
+    ):
+        if candidate.is_number and abs(complex(candidate.evalf()).real - value) < 1e-10:
+            return candidate
+    return None
 
 
 def _to_sympy_matrix_preserving_symbols(matrix: object) -> object:

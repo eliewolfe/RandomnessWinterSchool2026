@@ -48,6 +48,14 @@ from .scenario import ContextualityScenario
 class QKDNoncontextualLP:
     """Single-model noncontextual LP for Eve's QKD guessing attack."""
 
+    # Above this variable count the DPP objective Parameter is bypassed:
+    # CVXPY's parametrized canonicalization scales super-linearly in the
+    # parameter size (it tracks a parameter-affine map through canon), and
+    # for large scenarios it dwarfs the actual solve by orders of magnitude.
+    # Constant-objective problems re-canonicalize per setting instead, which
+    # is linear and fast.
+    _DPP_PARAMETER_LIMIT = 4096
+
     def __init__(
         self,
         scenario: ContextualityScenario,
@@ -146,17 +154,26 @@ class QKDNoncontextualLP:
         self._build_problem()
         out = np.full((self.num_y,), np.nan, dtype=float)
 
-        problem = self.cvxpy_problem
-        assert problem is not None and self.objective_coeffs is not None
         solve_kwargs = self._solve_kwargs()
         for y in range(self.num_y):
             if self._where_key_row(y).size == 0:
                 continue
 
-            # Re-use the single compiled problem; only the cost tensor changes.
-            # DPP keeps the canonicalization cached, so this forwards just a new
-            # objective to the solver rather than rebuilding the model.
-            self.objective_coeffs.value = self.objective_vectors_by_y[y]
+            if self._use_dpp_parameter:
+                # Re-use the single compiled problem; only the cost tensor
+                # changes. DPP keeps the canonicalization cached, so this
+                # forwards just a new objective to the solver.
+                problem = self.cvxpy_problem
+                assert problem is not None and self.objective_coeffs is not None
+                self.objective_coeffs.value = self.objective_vectors_by_y[y]
+            else:
+                # Constant objective: fresh problem per setting over the same
+                # constraint objects (their dual_values still populate).
+                problem = cp.Problem(
+                    cp.Maximize(cp.sum(cp.multiply(
+                        self.objective_vectors_by_y[y], self.cvxpy_variable))),
+                    self.cvxpy_constraints,
+                )
             value = float(problem.solve(**solve_kwargs))
             assert_cvxpy_solution_is_optimal(problem=problem, value=value, problem_kind=f"LP for y={y}")
             out[y] = float(value)
@@ -290,11 +307,19 @@ class QKDNoncontextualLP:
         # only assigning `objective_coeffs.value`. `sum(coeffs * P)` is
         # DPP-compliant (a parameter-affine objective), so CVXPY caches the
         # canonicalization across solves and only ships a fresh cost tensor.
-        self.objective_coeffs = cp.Parameter(self.shape, name="objective_coeffs")
-        self.cvxpy_problem = cp.Problem(
-            cp.Maximize(cp.sum(cp.multiply(self.objective_coeffs, self.cvxpy_variable))),
-            self.cvxpy_constraints,
-        )
+        # For large scenarios the parametrized canonicalization itself becomes
+        # the bottleneck, so past _DPP_PARAMETER_LIMIT variables we fall back
+        # to one constant-objective problem per setting (see solve_lp).
+        self._use_dpp_parameter = int(np.prod(self.shape)) <= self._DPP_PARAMETER_LIMIT
+        if self._use_dpp_parameter:
+            self.objective_coeffs = cp.Parameter(self.shape, name="objective_coeffs")
+            self.cvxpy_problem = cp.Problem(
+                cp.Maximize(cp.sum(cp.multiply(self.objective_coeffs, self.cvxpy_variable))),
+                self.cvxpy_constraints,
+            )
+        else:
+            self.objective_coeffs = None
+            self.cvxpy_problem = None
         self._build_objective_vectors()
 
     def _add_constraints(self) -> None:
