@@ -57,28 +57,114 @@ def _porac_article_prep_opeq_rows() -> sp.Matrix:
     return sp.Matrix(rows)
 
 
-def _print_porac_article_prep_opeqs() -> None:
-    rows = _porac_article_prep_opeq_rows()
-    print(f"\nPreparation OPEQs according to the article ({rows.rows} rows):")
+def _print_opeq_rows(title: str, rows: sp.Matrix, *, precision: int = 6) -> None:
+    """Print OPEQ rows one per line, in the article's explicit coefficient form."""
+    print(f"\n{title} ({rows.rows} rows):")
     for k in range(rows.rows):
-        row_entries = [ContextualityScenario._format_symbolic_entry(rows[k, x], precision=6) for x in range(rows.cols)]
+        row_entries = [ContextualityScenario._format_symbolic_entry(rows[k, x], precision=precision) for x in range(rows.cols)]
         ragged = "[[" + ", ".join(row_entries) + "]]"
         print(f"k={k}: {ragged}")
 
 
-def _validate_porac_prep_opeq_subspace(scenario: ContextualityScenario) -> tuple[int, int, int]:
+def _print_porac_article_prep_opeqs() -> None:
+    _print_opeq_rows("Preparation OPEQs according to the article", _porac_article_prep_opeq_rows())
+
+
+def _float_rref(matrix: np.ndarray, tol: float = 1e-9) -> np.ndarray:
+    """Reduced row echelon form with partial pivoting, dropping numerically-zero rows.
+
+    Done in floating point on purpose: the auto-discovered OPEQs arrive as an
+    orthonormalised numerical basis, so exact elimination would treat ~1e-16
+    round-off as genuine pivots.
+    """
+    work = np.array(matrix, dtype=float)
+    n_rows, n_cols = work.shape
+    pivot_row = 0
+    for col in range(n_cols):
+        if pivot_row >= n_rows:
+            break
+        candidate = pivot_row + int(np.argmax(np.abs(work[pivot_row:, col])))
+        if abs(work[candidate, col]) <= tol:
+            continue
+        work[[pivot_row, candidate]] = work[[candidate, pivot_row]]
+        work[pivot_row] /= work[pivot_row, col]
+        for row in range(n_rows):
+            if row != pivot_row:
+                work[row] -= work[row, col] * work[pivot_row]
+        pivot_row += 1
+    return work[:pivot_row]
+
+
+def _rationalize(matrix: np.ndarray, max_denominator: int = 64, tol: float = 1e-7) -> sp.Matrix:
+    """Snap a float matrix back to exact rationals, rejecting entries that do not fit cleanly."""
+    rows: list[list[sp.Rational]] = []
+    for row in np.asarray(matrix, dtype=float):
+        exact: list[sp.Rational] = []
+        for value in row:
+            candidate = sp.Rational(float(value)).limit_denominator(max_denominator)
+            if abs(float(candidate) - float(value)) > tol:
+                raise ValueError(
+                    f"Entry {float(value)!r} is not a rational with denominator <= {max_denominator}."
+                )
+            exact.append(candidate)
+        rows.append(exact)
+    return sp.Matrix(rows)
+
+
+def _canonical_opeq_rows(matrix: sp.Matrix) -> sp.Matrix:
+    """Canonical exact form (rationalised RREF) of a set of OPEQ rows.
+
+    Two OPEQ sets describe the same constraints exactly when their canonical
+    forms are equal, whatever basis each was expressed in.
+    """
+    as_float = np.array(sp.Matrix(matrix).tolist(), dtype=float)
+    return _rationalize(_float_rref(as_float))
+
+
+def _span_residual(row: np.ndarray, basis: np.ndarray) -> float:
+    """Largest coefficient error when least-squares fitting `row` inside `basis`'s row space."""
+    design = np.asarray(basis, dtype=float).T
+    target = np.asarray(row, dtype=float)
+    coefficients, *_ = np.linalg.lstsq(design, target, rcond=None)
+    return float(np.max(np.abs(design @ coefficients - target)))
+
+
+def _validate_porac_prep_opeq_subspace(scenario: ContextualityScenario) -> tuple[sp.Matrix, sp.Matrix]:
+    """Check the auto-discovered prep OPEQs against the article's, via exact canonical forms.
+
+    Returns the (article, discovered) canonical forms so the caller can print them.
+    """
     article = _porac_article_prep_opeq_rows()
     discovered = sp.Matrix(np.asarray(scenario.opeq_preps_symbolic, dtype=object).reshape(-1, scenario.X_cardinality))
-    rank_article = int(article.rank())
-    rank_discovered = int(discovered.rank())
-    rank_stacked = int(sp.Matrix.vstack(article, discovered).rank())
-    if not (rank_article == rank_discovered == rank_stacked):
+    article_canonical = _canonical_opeq_rows(article)
+    discovered_canonical = _canonical_opeq_rows(discovered)
+    if article_canonical != discovered_canonical:
         raise ValueError(
-            "Auto-discovered preparation OPEQs are not equivalent to PORAC article constraints: "
-            f"rank(article)={rank_article}, rank(discovered)={rank_discovered}, "
-            f"rank(vstack)={rank_stacked}."
+            "Auto-discovered preparation OPEQs are not equivalent to PORAC article constraints:\n"
+            f"article canonical form:\n{article_canonical}\n"
+            f"discovered canonical form:\n{discovered_canonical}"
         )
-    return rank_article, rank_discovered, rank_stacked
+    return article_canonical, discovered_canonical
+
+
+def _print_porac_prep_opeq_comparison(scenario: ContextualityScenario) -> None:
+    """Show the article OPEQs, the discovered ones in the same explicit form, and per-row membership."""
+    article = _porac_article_prep_opeq_rows()
+    discovered = sp.Matrix(np.asarray(scenario.opeq_preps_symbolic, dtype=object).reshape(-1, scenario.X_cardinality))
+
+    _print_porac_article_prep_opeqs()
+
+    article_canonical, discovered_canonical = _validate_porac_prep_opeq_subspace(scenario)
+    _print_opeq_rows("Auto-discovered preparation OPEQs, canonical exact form", discovered_canonical)
+    _print_opeq_rows("Article preparation OPEQs, canonical exact form", article_canonical)
+    print(f"\nCanonical forms agree entry by entry: {article_canonical == discovered_canonical}")
+
+    discovered_float = np.array(discovered.tolist(), dtype=float)
+    print("\nEach article OPEQ, checked for membership in the auto-discovered span:")
+    for k in range(article.rows):
+        residual = _span_residual(np.array(article.row(k).tolist(), dtype=float).ravel(), discovered_float)
+        verdict = "in span" if residual < 1e-9 else "NOT in span"
+        print(f"k={k}: residual={residual:.2e}  ->  {verdict}")
 
 
 def build_porac_scenario(*, eta: float = 1.0) -> QuantumContextualityScenario:
@@ -159,12 +245,7 @@ def main() -> None:
     print("\nOperational equivalences:")
     scenario.print_operational_equivalences(precision=3, representation="symbolic")
     scenario.print_contextuality_measures(metrics=["contextual_fraction"], precision=3, show_inequalities=True, backend_solver="mosek_simplex")
-    _print_porac_article_prep_opeqs()
-    rank_article, rank_discovered, rank_stacked = _validate_porac_prep_opeq_subspace(scenario)
-    print(
-        "\nValidated PORAC prep-OPEQ subspace equivalence to article constraints: "
-        f"rank(article)={rank_article}, rank(discovered)={rank_discovered}, rank(vstack)={rank_stacked}."
-    )
+    _print_porac_prep_opeq_comparison(scenario)
     protocol.print_alice_guessing_metrics()
     protocol.print_alice_uncertainty_metrics()
     # bob_protocol.print_eve_security_metrics(
