@@ -35,13 +35,28 @@ def main() -> None:
     #    - 0 and pi are computational basis |0>,|1> (Z measurement basis)
     #    - +/- pi/2 are |+>,|-> (X basis)
     # ---------------------------------------------------------------------
+    # ket0 = GPTContextualityScenario.xz_plane_ket(0)
+    # ket1 = GPTContextualityScenario.xz_plane_ket(sp.pi)
+    # ket_plus = GPTContextualityScenario.xz_plane_ket(sp.pi / 2)
+    # ket_minus = GPTContextualityScenario.xz_plane_ket(-sp.pi / 2)
+    
+    # state_kets = [ket0, ket1, ket_plus, ket_minus]
+    # effect_kets = [ket0, ket1, ket_plus, ket_minus]
+
+    #----------------------------------------------------------------------
+    #Another set of preparations and measurement to do the CHSH prepare and measure
     ket0 = GPTContextualityScenario.xz_plane_ket(0)
     ket1 = GPTContextualityScenario.xz_plane_ket(sp.pi)
     ket_plus = GPTContextualityScenario.xz_plane_ket(sp.pi / 2)
     ket_minus = GPTContextualityScenario.xz_plane_ket(-sp.pi / 2)
+
+    e0 = GPTContextualityScenario.xz_plane_ket(sp.pi / 4)
+    e1 = GPTContextualityScenario.xz_plane_ket(-3*sp.pi/4)
+    e2 = GPTContextualityScenario.xz_plane_ket(3*sp.pi / 4)
+    e3 = GPTContextualityScenario.xz_plane_ket(-sp.pi / 4)
     
     state_kets = [ket0, ket1, ket_plus, ket_minus]
-    effect_kets = [ket0, ket1, ket_plus, ket_minus]
+    effect_kets = [e0, e1, e2, e3]
 
     # ---------------------------------------------------------------------
     # 2) Specify preparation and measurement groupings explicitly.
