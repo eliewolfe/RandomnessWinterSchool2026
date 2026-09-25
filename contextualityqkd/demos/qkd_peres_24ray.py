@@ -63,6 +63,9 @@ def main() -> None:
     )
     protocol = ContextualityProtocol(
         scenario=scenario,
+        # Optimal key selection (LP, reverse-Fano, objective = bits per key-generating run; heuristic search, X=24):
+        # the contexts themselves, where_key=measurement_indices, are the best found: exactly 1
+        # bit/key-run (Bob's outcome is deterministic and Eve's guess is 1/2) with P(keygen)=1/6.
         where_key=measurement_indices,
         master_key_holder="Alice",
         atol=1e-9,

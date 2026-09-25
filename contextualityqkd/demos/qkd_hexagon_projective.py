@@ -31,6 +31,8 @@ def main() -> None:
     )
     protocol = ContextualityProtocol(
         scenario=scenario,
+        # Optimal key selection (LP, reverse-Fano, objective = bits per key-generating run; exhaustive): the aligned pairs
+        # where_key=measurement_indices are optimal, 0.5000 bits/key-run with P(keygen)=1/3.
         where_key=measurement_indices,
         # where_key=None,
         master_key_holder="Alice",

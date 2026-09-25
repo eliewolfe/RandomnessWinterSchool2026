@@ -99,6 +99,9 @@ def main() -> None:
 
     protocol = ContextualityProtocol(
         scenario=scenario,
+        # Optimal key selection (LP, reverse-Fano, objective = bits per key-generating run; exhaustive search over
+        # every preparation subset per setting): all four preparations for both settings, i.e.
+        # where_key=None, giving 0.1062 bits/key-run with P(keygen)=1. No proper subset does better.
         where_key=None,
         master_key_holder="Alice",
         atol=1e-9,

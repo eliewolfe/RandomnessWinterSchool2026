@@ -132,6 +132,9 @@ def main() -> None:
 
     protocol = ContextualityProtocol(
         scenario=scenario,
+        # Optimal key selection (LP, reverse-Fano, objective = bits per key-generating run; exhaustive for 8 states):
+        # the antipodal pairs where_key=[(0, 4), (1, 5), (2, 6), (3, 7)] (= measurement_indices) give
+        # 0.5858 bits/key-run with P(keygen)=1/4, versus 0.1072 for where_key=None used here.
         where_key=None,
         master_key_holder="Alice",
         atol=1e-9,

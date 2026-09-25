@@ -55,6 +55,9 @@ scenario = GPTContextualityScenario(
 
 protocol = ContextualityProtocol(
     scenario=scenario,
+    # Optimal key selection (LP, reverse-Fano, objective = bits per key-generating run; exhaustive): the full selection
+    # below is already optimal, 0.1062 bits/key-run with P(keygen)=1 (same scenario as qkd_BB84 with
+    # the CHSH effects).
     where_key=[(0,1,2,3),(0,1,2,3)],
     master_key_holder="Alice",
     atol=1e-9,

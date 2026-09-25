@@ -92,6 +92,12 @@ def main() -> None:
     scenario = build_icosahedron_dodecahedron_scenario(eta=1.0)
     protocol = ContextualityProtocol(
         scenario=scenario,
+        # Optimal key selection (LP, reverse-Fano, objective = bits per key-generating run; heuristic search, X=20):
+        # best found 0.3325 bits/key-run with P(keygen)=1/10 at
+        #   where_key=[(0, 4, 9, 11), (), (0, 2, 17, 19), (), (0, 1, 13, 15), ()],
+        # versus a negative rate for where_key=None used here. Keeping every setting at its own best
+        # subset, [(0, 4, 9, 11), (2, 8), (0, 2, 17, 19), (1, 16), (0, 1, 13, 15), (4, 12)], gives
+        # 0.3310 with P(keygen)=0.15.
         where_key=None,
         master_key_holder="Alice",
         atol=1e-9,

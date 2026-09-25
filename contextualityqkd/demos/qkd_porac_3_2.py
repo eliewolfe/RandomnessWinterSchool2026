@@ -211,6 +211,9 @@ def main() -> None:
     #   the nonprojective constraint model active.
     protocol = ContextualityProtocol(
         scenario=scenario,
+        # Optimal key selection (LP, reverse-Fano, objective = bits per key-generating run; exhaustive): no choice of
+        # preparations per setting gives a positive LP rate (the best per-setting rate is exactly 0).
+        # The positive rate reported below comes from the SDP bound only.
         where_key=None,
         master_key_holder="Alice",
         atol=1e-9,

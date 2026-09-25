@@ -190,6 +190,9 @@ def main() -> None:
     scenario.print_probabilities(precision=3, representation="symbolic")
     scenario.print_contextuality_measures(metrics=["contextual_fraction"], precision=3, show_inequalities=True, backend_solver="mosek_simplex")
 
+    # Optimal key selection (LP, reverse-Fano, objective = bits per key-generating run; exhaustive): [(4, 5), ()] is
+    # optimal, 0.5858 bits/key-run with P(keygen)=1/6. Keeping every setting at its own best subset,
+    # [(4, 5), (0, 1, 2, 3)], lowers the rate to 0.2661 but raises P(keygen) to 1/2.
     WHERE_KEY = [(4, 5), ()]
 
     # Two-arm comparison: real preparation OPEQs vs no-signalling ones only.
